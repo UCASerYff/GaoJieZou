@@ -1,0 +1,11 @@
+{
+  "module": "Rhythm",
+  "name": "搞节奏",
+  "bundle_id": "com.gaojiezou.rhythm",
+  "executable": "GaoJieZou",
+  "scheme": "gaojiezou",
+  "widget_folder": "WidgetExtension",
+  "widget": "GaoJieZouWidgets",
+  "group": "5G96498KGJ.com.gaojiezou.rhythm",
+  "preferences": "com.gaojiezou.rhythm.Rhythm"
+}

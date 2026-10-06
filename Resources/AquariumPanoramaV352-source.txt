@@ -1,0 +1,4 @@
+Generated with the built-in image_gen tool, 2026-09-30.
+Prompt: Refined cozy hand-painted underwater freshwater conservatory, panoramic invisible window, teal turquoise water and sunlight caustics, detailed river stones, driftwood and aquatic plants framing sides and lower corners, clear center 65% for animated collectible fish. No fish, creatures, UI, text, borders, tank walls or grids.
+
+EstateMeadowV352.png — built-in image_gen tool. Prompt: Seamless square orthographic straight-down albedo texture for a cozy premium 3D farming game, lush fresh medium green meadow turf, finely painted varied grass blades, tiny clover, subtle moss patches and earth speckles. Dense short grass, even scale, soft diffuse illumination, no cast shadows, horizon, perspective, buildings, crops, animals, paths, text, borders, grids or isolated objects. Seamless all edges, polished painterly stylized realistic material.
