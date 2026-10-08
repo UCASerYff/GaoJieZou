@@ -28,7 +28,9 @@ final class RhythmStore: ObservableObject {
     @Published var chores: [Chore] = []
     @Published var habitCompletionKeys: Set<String> = []
     @Published var habitRewardKeys: Set<String> = []
-    @Published var activeFocus: ActiveFocus?
+    @Published var activeFocus: ActiveFocus? {
+        didSet { realtimeEngine.setFocusRunning(activeFocus?.segmentStartedAt != nil) }
+    }
     @Published var focusRecords: [FocusRecord] = []
     @Published var activeSleep: ActiveSleep?
     @Published var sleepRecords: [SleepRecord] = []
@@ -384,6 +386,14 @@ final class RhythmStore: ObservableObject {
     }
 
     // MARK: - Focus
+
+    func prepareForTermination() {
+        if activeFocus?.segmentStartedAt != nil {
+            pauseFocus()
+        } else {
+            synchronizeRealtimeProgress(at: Date(), persist: true)
+        }
+    }
 
     func focusElapsed(at date: Date = Date()) -> TimeInterval {
         guard let focus = activeFocus else { return 0 }

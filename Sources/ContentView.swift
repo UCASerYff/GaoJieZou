@@ -63,14 +63,6 @@ struct ContentView: View {
         } message: {
             Text(store.notice ?? "")
         }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
-            store.synchronizeRealtimeProgress(at: Date())
-            if store.activeFocus?.segmentStartedAt != nil {
-                store.pauseFocus()
-            } else {
-                store.save()
-            }
-        }
         .onAppear {
             updateWindowTitle()
             RhythmNotifications.rescheduleDailyHabitReminder(settings: settings, pendingCount: store.pendingHabitCountToday)

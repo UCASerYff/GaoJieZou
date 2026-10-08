@@ -12,6 +12,13 @@ enum RhythmBundle {
     static let settings = RhythmSettings()
 }
 
+/// The application owns termination, including when no content view is alive.
+@MainActor public enum RhythmApplicationLifecycle {
+    public static func prepareForTermination() {
+        RhythmRuntime.store.prepareForTermination()
+    }
+}
+
 public struct RhythmModuleView: View {
     @ObservedObject private var store = RhythmRuntime.store
     @ObservedObject private var settings = RhythmRuntime.settings
@@ -52,4 +59,3 @@ public struct RhythmSettingsView: View {
             .environment(\.locale, settings.language.locale)
     }
 }
-

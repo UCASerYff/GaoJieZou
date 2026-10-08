@@ -20,6 +20,6 @@ codesign --force --sign "$SIGNING_IDENTITY" "$RELEASE_APP/Contents/Frameworks/Rh
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Widget.entitlements" "$RELEASE_APP/Contents/PlugIns/GaoJieZouWidgets.appex"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/App.entitlements" "$RELEASE_APP"
 codesign --verify --deep --strict "$RELEASE_APP"
-ditto -c -k --keepParent --norsrc --noextattr "$RELEASE_APP" "$ROOT/dist/搞节奏-$VERSION.zip"
-(cd "$ROOT/dist"; shasum -a 256 "搞节奏-$VERSION.zip" > "搞节奏-$VERSION.zip.sha256")
-echo "Packaged $ROOT/dist/搞节奏-$VERSION.zip"
+ditto -c -k --keepParent --norsrc --noextattr "$RELEASE_APP" "$ROOT/dist/GaoJieZou-$VERSION.zip"
+(cd "$ROOT/dist"; shasum -a 256 "GaoJieZou-$VERSION.zip" > "GaoJieZou-$VERSION.zip.sha256")
+echo "Packaged $ROOT/dist/GaoJieZou-$VERSION.zip"

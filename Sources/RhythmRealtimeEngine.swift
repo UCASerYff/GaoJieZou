@@ -22,6 +22,7 @@ final class RhythmRealtimeEngine {
 
     private var workspaceObservers: [NSObjectProtocol] = []
     private var realtimeTimer: AnyCancellable?
+    private var focusActivity: NSObjectProtocol?
     private var lastRealtimeSaveAt = Date.distantPast
 
     /// 每秒计时回调，参数为计时器触发时间。
@@ -36,11 +37,26 @@ final class RhythmRealtimeEngine {
         observeWorkspaceState()
     }
 
+    /// Keep user-started focus responsive with all windows closed. Allow idle
+    /// system sleep so the existing lock/sleep pause policy remains effective.
+    func setFocusRunning(_ running: Bool) {
+        if running, focusActivity == nil {
+            focusActivity = ProcessInfo.processInfo.beginActivity(
+                options: .userInitiatedAllowingIdleSystemSleep,
+                reason: "正在进行专注计时"
+            )
+        } else if !running, let activity = focusActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            focusActivity = nil
+        }
+    }
+
     deinit {
         for observer in workspaceObservers {
             NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         realtimeTimer?.cancel()
+        if let activity = focusActivity { ProcessInfo.processInfo.endActivity(activity) }
     }
 
     private func startRealtimeClock() {
