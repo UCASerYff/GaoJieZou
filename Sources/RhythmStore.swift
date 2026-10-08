@@ -49,6 +49,7 @@ final class RhythmStore: ObservableObject {
     @Published var rewardEvents: [RewardEvent] = []
     @Published var decorations: [OwnedDecoration] = []
     @Published var notice: String?
+    @Published private(set) var sleepSyncError: String?
 
     let aquariumCapacity = RhythmEconomy.aquariumCapacity
 
@@ -56,6 +57,8 @@ final class RhythmStore: ObservableObject {
     @Published private(set) var loadFailed=false
     private let realtimeEngine = RhythmRealtimeEngine()
     private let estateEngine = RhythmEstateEngine()
+    private let sleepSync = RhythmSleepSync()
+    private var synchronizingSleep = false
 
     private var lastWidgetReloadAt = Date.distantPast
     /// 小组件关心的数据（打卡/琐事/专注/睡眠/长期目标/短期行动）自上次
@@ -80,6 +83,7 @@ final class RhythmStore: ObservableObject {
             self.resumeFocus()
         }
         realtimeEngine.start()
+        sleepSync.start { [weak self] in self?.synchronizeSleepRecords() }
     }
 
     // MARK: - 持久化（委托 RhythmPersistence）
@@ -547,6 +551,62 @@ final class RhythmStore: ObservableObject {
 
     // MARK: - Sleep
 
+    /// Import the canonical sleep journal without ever replacing unrelated
+    /// personal or game state. Failed reads leave the local archive intact.
+    func synchronizeSleepRecords() {
+        guard !loadFailed, sleepSync.enabled, !synchronizingSleep else { return }
+        synchronizingSleep = true
+        defer { synchronizingSleep = false }
+        do {
+            let entries = try sleepSync.records(seeding: sleepRecords)
+            let localByID = Dictionary(sleepRecords.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            let before = snapshot()
+            var incoming = entries.map { entry -> SleepRecord in
+                var record = SleepRecord(shared: entry)
+                if let local = localByID[record.id] { record.preserveSettlement(from: local) }
+                return record
+            }
+            incoming.sort { $0.endedAt > $1.endedAt }
+            if incoming != sleepRecords {
+                sleepRecords = incoming
+                let configuredTarget = RhythmBundle.defaults.double(forKey: "rhythm.sleepTargetHours")
+                let target = configuredTarget.isFinite && configuredTarget > 0 ? configuredTarget : 8
+                // Only newly imported Health records need a local pasture receipt.
+                // Existing timer/manual receipts are never replayed during migration.
+                for entry in entries where entry.origin == "health" && localByID[entry.id] == nil {
+                    settleManualSleep(recordID: entry.id, targetHours: target)
+                }
+                widgetDirty = true
+                guard save() else {
+                    apply(before)
+                    sleepSyncError = RhythmLocalization.text("睡眠同步暂未完成，本地资料已保留，将自动重试。")
+                    return
+                }
+            }
+            let entryByID = Dictionary(entries.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for record in sleepRecords {
+                if let entry = entryByID[record.id], record.hasDifferentSettlement(from: entry) {
+                    // Merge only reward receipts: a concurrent edit or tombstone
+                    // must not be overwritten by a stale complete record.
+                    try sleepSync.publishSettlement(record)
+                }
+            }
+            sleepSyncError = nil
+        } catch {
+            sleepSyncError = RhythmLocalization.format("睡眠同步暂不可用，本地记录已保留：%@", error.localizedDescription)
+        }
+    }
+
+    private func publishCompletedSleep(_ record: SleepRecord) throws {
+        try sleepSync.publish(record)
+        sleepSyncError = nil
+    }
+
+    private func notifySleepSaved() {
+        NotificationCenter.default.post(name: Notification.Name("GaoSeries.rhythm.sleepSaved"), object: nil)
+        DistributedNotificationCenter.default().postNotificationName(Notification.Name("GaoSeries.rhythm.sleepSaved"), object: nil, userInfo: nil, deliverImmediately: true)
+    }
+
     func sleepElapsed(at date: Date = Date()) -> TimeInterval {
         guard let sleep = activeSleep else { return 0 }
         return max(0, date.timeIntervalSince(sleep.startedAt))
@@ -610,6 +670,8 @@ final class RhythmStore: ObservableObject {
 
     func finishSleep(at date: Date = Date(), targetHours: Double) {
         guard let existing = activeSleep, date >= existing.startedAt else { return }
+        synchronizeSleepRecords()
+        let before = snapshot()
         synchronizeRealtimeProgress(at: date)
         guard let sleep = activeSleep else { return }
         let duration = max(0, date.timeIntervalSince(sleep.startedAt))
@@ -634,10 +696,19 @@ final class RhythmStore: ObservableObject {
             symbol: "moon.stars.fill"
         )
         widgetDirty = true
-        if save() {
-            NotificationCenter.default.post(name: Notification.Name("GaoSeries.rhythm.sleepSaved"), object:nil)
-            DistributedNotificationCenter.default().postNotificationName(Notification.Name("GaoSeries.rhythm.sleepSaved"), object:nil, userInfo:nil, deliverImmediately:true)
+        guard save() else { apply(before); return }
+        guard let record = sleepRecords.first(where: { $0.id == sleep.id }) else { return }
+        do {
+            try publishCompletedSleep(record)
+        } catch SharedSleepError.duplicate {
+            apply(before)
+            _ = save()
+            notice = RhythmLocalization.text("已有相同的睡眠记录。计时已保留，请检查记录后决定是否放弃本次计时。")
+            return
+        } catch {
+            sleepSyncError = RhythmLocalization.format("睡眠已在本机保存，同步将自动重试：%@", error.localizedDescription)
         }
+        notifySleepSaved()
     }
 
     func cancelSleep() {
@@ -658,6 +729,8 @@ final class RhythmStore: ObservableObject {
         case invalidDuration
         /// 已有起止时间完全相同（误差 1 分钟内）的记录。
         case duplicate
+        /// 本地资料无法保存，保留原状态供用户重试。
+        case saveFailed
     }
 
     /// 手动录入一条已完成的睡眠（用户在 Apple Watch 等其他软件里计时，只把结果记进来）。
@@ -665,13 +738,16 @@ final class RhythmStore: ObservableObject {
     /// 实时结算同规则为这条记录补一次牧场成长与产出（记账在记录的 manual 字段上）。
     @discardableResult
     func addManualSleep(start: Date, end: Date, targetHours: Double = 8) -> ManualSleepResult {
-        guard end > start else { return .invalidRange }
+        guard start.timeIntervalSince1970.isFinite, end.timeIntervalSince1970.isFinite,
+              end > start, end <= Date(), targetHours.isFinite, targetHours > 0 else { return .invalidRange }
         let duration = end.timeIntervalSince(start)
         guard (0.5 * 3600 ... 24 * 3600).contains(duration) else { return .invalidDuration }
+        synchronizeSleepRecords()
         let isDuplicate = sleepRecords.contains {
             abs($0.startedAt.timeIntervalSince(start)) < 60 && abs($0.endedAt.timeIntervalSince(end)) < 60
         }
         guard !isDuplicate else { return .duplicate }
+        let before = snapshot()
 
         let sessionTarget = max(1, targetHours)
         let hours = duration / 3600
@@ -699,10 +775,18 @@ final class RhythmStore: ObservableObject {
             symbol: "moon.stars.fill"
         )
         widgetDirty = true
-        if save() {
-            NotificationCenter.default.post(name: Notification.Name("GaoSeries.rhythm.sleepSaved"), object:nil)
-            DistributedNotificationCenter.default().postNotificationName(Notification.Name("GaoSeries.rhythm.sleepSaved"), object:nil, userInfo:nil, deliverImmediately:true)
+        guard save() else { apply(before); return .saveFailed }
+        do {
+            try publishCompletedSleep(sleepRecords.first(where: { $0.id == record.id }) ?? record)
+        } catch SharedSleepError.duplicate {
+            apply(before)
+            guard save() else { return .saveFailed }
+            synchronizeSleepRecords()
+            return .duplicate
+        } catch {
+            sleepSyncError = RhythmLocalization.format("睡眠已在本机保存，同步将自动重试：%@", error.localizedDescription)
         }
+        notifySleepSaved()
         return .added(score: score)
     }
 

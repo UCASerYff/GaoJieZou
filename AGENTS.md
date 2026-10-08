@@ -8,5 +8,9 @@
 - 安装新版本、验证业务记录、游戏进度、附件及小组件后，清理旧程序和中间构建。不能删除用户数据或其备份。
 - 如需修改其他独立应用，单独更新其源码、版本及安装包，不引用已删除的整合版工程。
 
-- 升级前退出应用，运行 `python3 scripts/upgrade_data.py snapshot --version <新版本>`。安装后用返回的私有备份路径运行 `verify-live`，逐项查明任何资料/设置差异；数据格式不变时沿用原路径。
+- 升级前退出搞节奏与搞健康，运行 `python3 scripts/upgrade_data.py snapshot --version <新版本>`。安装后用返回的私有备份路径运行 `verify-live`，逐项查明任何资料/设置差异；数据格式不变时沿用原路径。
 - `./scripts/test_background_focus.sh` 覆盖无窗口计时、系统暂停/恢复和退出保存；窗口生命周期变更还需隔离副本的实际关闭/重开验收。
+
+- 升级快照同时包含搞健康 App Group 的 `SharedSleep` 共享睡眠目录；首次升级前目录缺失须显式记录，已有目录缺少数据库不能视为空白。`python3 Tests/test_upgrade_data.py` 和 `./scripts/test_backup.sh` 使用隔离资料/设置验证。
+
+- `Sources/SharedSleepStore.swift` 是两应用共同的睡眠存档协议，修改时保持搞健康与搞节奏副本一致并分别测试。历史迁移只通过 `seedLegacyOnce` 执行；新记录使用去重写入，不得重复全量导入或覆写另一应用资料库。

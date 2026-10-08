@@ -2,7 +2,7 @@
 set -euo pipefail
 ROOT=${0:A:h:h}
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-TEST_BUILD=$(mktemp -d "${TMPDIR:-/tmp/}rhythm-background-focus-build.XXXXXX")
+TEST_BUILD=$(mktemp -d "${TMPDIR:-/tmp/}rhythm-sleep-sync-build.XXXXXX")
 trap 'rm -rf "$TEST_BUILD"' EXIT
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 SOURCES=(
@@ -17,6 +17,6 @@ swiftc -swift-version 5 -parse-as-library -D SMOKE_TEST \
     -module-cache-path "$TEST_BUILD/cache" \
     -framework AppKit -framework SwiftUI -framework Combine -framework WidgetKit \
     -framework UserNotifications -lsqlite3 \
-    $FILES "$ROOT/Tests/BackgroundFocusRegression.swift" \
-    -o "$TEST_BUILD/background-focus-regression"
-"$TEST_BUILD/background-focus-regression"
+    $FILES "$ROOT/Tests/SleepSyncRegression.swift" \
+    -o "$TEST_BUILD/sleep-sync-regression"
+"$TEST_BUILD/sleep-sync-regression"

@@ -175,6 +175,16 @@
 "睡眠时长需在 30 分钟至 24 小时之间，分钟需为 0–59。" = "Sleep duration must be between 30 minutes and 24 hours, with minutes from 0 to 59.";
 "已有一条起止时间几乎相同的睡眠记录，请勿重复录入。" = "A sleep record with nearly identical start and end times already exists.";
 "手动录入睡眠记录" = "Sleep Logged Manually";
+"同步记录" = "Sync Records";
+"搞健康" = "Health";
+"与搞健康自动同步，在任一应用记录一次即可；搞健康删除的记录也会同步移除。" = "Sleep records sync automatically with Health. Log once in either app; deletions in Health sync here too.";
+"只能记录已结束的睡眠，请选择更早的夜晚。" = "Only completed sleep can be logged. Choose an earlier night.";
+"起床时间必须晚于就寝时间，且不能晚于现在。" = "Wake time must follow bedtime and cannot be in the future.";
+"睡眠记录保存失败，原资料已保留，请重试。" = "Sleep could not be saved. Your existing data is preserved; please retry.";
+"睡眠同步暂未完成，本地资料已保留，将自动重试。" = "Sleep sync could not finish. Local data is preserved and sync will retry automatically.";
+"睡眠同步暂不可用，本地记录已保留：%@" = "Sleep sync is unavailable. Local records are preserved: %@";
+"睡眠已在本机保存，同步将自动重试：%@" = "Sleep is saved locally. Sync will retry automatically: %@";
+"已有相同的睡眠记录。计时已保留，请检查记录后决定是否放弃本次计时。" = "This sleep is already recorded. The timer is preserved; review your records before discarding it.";
 "记录了 %@，牧场成长与 %d 份产物已补结算。" = "Logged %@; pasture growth and %d product(s) have been settled.";
 "手动" = "Manual";
 "记录睡眠" = "Log Sleep";

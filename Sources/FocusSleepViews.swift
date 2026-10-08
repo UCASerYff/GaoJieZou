@@ -245,7 +245,20 @@ struct SleepDashboard: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(RhythmLocalization.text("睡眠记录")).font(.headline)
+                    HStack {
+                        Text(RhythmLocalization.text("睡眠记录")).font(.headline)
+                        Spacer()
+                        Button { store.synchronizeSleepRecords() } label: {
+                            Label(RhythmLocalization.text("同步记录"), systemImage: "arrow.triangle.2.circlepath")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    Text(RhythmLocalization.text("与搞健康自动同步，在任一应用记录一次即可；搞健康删除的记录也会同步移除。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if let error = store.sleepSyncError {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(RhythmTheme.orange)
+                    }
                     if store.sleepRecords.isEmpty {
                         Text(RhythmLocalization.text("完成第一次睡眠计时后，记录会出现在这里。"))
                             .font(.callout).foregroundStyle(.secondary)
@@ -263,8 +276,8 @@ struct SleepDashboard: View {
                                     HStack(spacing: 6) {
                                         Text(RhythmLocalization.format("%@ 夜间睡眠", RhythmFormatters.shortDate.string(from: record.startedAt)))
                                             .font(.callout.weight(.medium))
-                                        if record.manualEntry == true {
-                                            Text(RhythmLocalization.text("手动"))
+                                        if record.healthSource != nil || record.manualEntry == true {
+                                            Text(RhythmLocalization.text(record.healthSource != nil ? "搞健康" : "手动"))
                                                 .font(.caption2.weight(.semibold))
                                                 .foregroundStyle(RhythmTheme.purple)
                                                 .padding(.horizontal, 6)
@@ -567,6 +580,9 @@ private struct ManualSleepEditor: View {
         if durationMinutes == nil {
             return RhythmLocalization.text("睡眠时长需在 30 分钟至 24 小时之间，分钟需为 0–59。")
         }
+        if interval.end > Date() {
+            return RhythmLocalization.text("只能记录已结束的睡眠，请选择更早的夜晚。")
+        }
         return nil
     }
 
@@ -650,11 +666,13 @@ private struct ManualSleepEditor: View {
         case .added:
             dismiss()
         case .invalidRange:
-            saveError = RhythmLocalization.text("起床时间必须晚于就寝时间。")
+            saveError = RhythmLocalization.text("起床时间必须晚于就寝时间，且不能晚于现在。")
         case .invalidDuration:
             saveError = RhythmLocalization.text("睡眠时长需在 30 分钟至 24 小时之间，分钟需为 0–59。")
         case .duplicate:
             saveError = RhythmLocalization.text("已有一条起止时间几乎相同的睡眠记录，请勿重复录入。")
+        case .saveFailed:
+            saveError = store.notice ?? RhythmLocalization.text("睡眠记录保存失败，原资料已保留，请重试。")
         }
     }
 }

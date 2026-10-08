@@ -29,10 +29,26 @@ enum AppBackupExport {
         }
     }
 
+    /// A present journal directory must contain its database. Lost/unreadable
+    /// storage never becomes an empty backup that could replace a healthy journal.
+    @discardableResult static func validateSharedSleep(_ directory:URL) throws -> Bool {
+        let fm=FileManager.default
+        let attributes:[FileAttributeKey:Any]
+        do { attributes=try fm.attributesOfItem(atPath:directory.path) }
+        catch let error as CocoaError where error.code == .fileReadNoSuchFile { return false }
+        guard attributes[.type] as? FileAttributeType == .typeDirectory else { throw CocoaError(.fileReadCorruptFile) }
+        let database=directory.appendingPathComponent("sleep-records.sqlite")
+        let dataAttributes=try fm.attributesOfItem(atPath:database.path)
+        guard dataAttributes[.type] as? FileAttributeType == .typeRegular,
+              (dataAttributes[.size] as? NSNumber)?.intValue ?? 0 > 0 else { throw CocoaError(.fileReadCorruptFile) }
+        let handle=try FileHandle(forReadingFrom:database);try handle.close()
+        return true
+    }
+
     /// 后台队列调用。appSupport / group 任一存在即可；destination 已存在时先保留旧文件，
     /// 新 zip 验证通过后才替换。
     @discardableResult
-    static func export(appSupport: URL?, group: URL?, destination: URL) throws -> Summary {
+    static func export(appSupport: URL?, group: URL?, sharedSleep: URL? = nil, destination: URL) throws -> Summary {
         let fileManager = FileManager.default
         let workRoot = fileManager.temporaryDirectory
             .appendingPathComponent("gqns-export-\(UUID().uuidString)", isDirectory: true)
@@ -54,6 +70,9 @@ enum AppBackupExport {
                 try BackupIntegrity.copySnapshot(from: group, to: payload.appendingPathComponent("AppGroupContainer", isDirectory: true))
                 copied += 1
             } catch { throw ExportError.copyFailed(error.localizedDescription) }
+        }
+        if let sharedSleep,try validateSharedSleep(sharedSleep) {
+            try BackupIntegrity.copySnapshot(from:sharedSleep,to:payload.appendingPathComponent("SharedSleep",isDirectory:true))
         }
         guard copied > 0 else { throw ExportError.noSources }
 

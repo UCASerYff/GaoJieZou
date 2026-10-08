@@ -21,6 +21,7 @@ enum AppAppearance:String {
 }
 enum AppDataLocations {
     static var appSupport:URL? { FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask).first?.appendingPathComponent("GaoSeries/Rhythm",isDirectory:true) }
+    static var sharedSleepContainer:URL? { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier:"5G96498KGJ.com.gaoseries.GaoJianKang")?.appendingPathComponent("SharedSleep",isDirectory:true) }
     static var groupContainer:URL? { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier:"5G96498KGJ.com.gaojiezou.rhythm") }
 }
 struct DataSettings:View {
@@ -29,7 +30,7 @@ struct DataSettings:View {
     var body:some View {
         Form {
             Section("完整资料") {
-                Text("包含业务历史、游戏进度、PDF、Word、图片及数据目录内的全部附件；密钥继续由系统钥匙串保管。")
+                Text("包含业务历史、游戏进度、与搞健康共享的睡眠记录、PDF、Word、图片及数据目录内的全部附件；密钥继续由系统钥匙串保管。")
                 Button("导出完整资料…",action:export).disabled(busy)
                 Button("从完整资料恢复…",action:restore).disabled(busy)
                 if busy { ProgressView() }
@@ -52,8 +53,9 @@ struct DataSettings:View {
         guard panel.runModal() == .OK,let url=panel.url else {return}
         busy=true;status="正在备份并逐文件校验…"
         let support=AppDataLocations.appSupport,group=AppDataLocations.groupContainer
+        guard let sharedSleep=AppDataLocations.sharedSleepContainer else { busy=false;status="无法读取共享睡眠目录，请重新打开已签名版本后重试。";return }
         Task { do {
-            let result=try await Task.detached {try AppBackupExport.export(appSupport:support,group:group,destination:url)}.value
+            let result=try await Task.detached {try AppBackupExport.export(appSupport:support,group:group,sharedSleep:sharedSleep,destination:url)}.value
             busy=false;status="备份完成：\(result.fileCount) 个文件，全部 SHA-256 校验通过。"
         } catch {busy=false;status="备份失败：\(error.localizedDescription)"} }
     }
@@ -64,7 +66,7 @@ struct DataSettings:View {
         Task { do {
             let (staged,manifest)=try await Task.detached {try AppBackupRestore.prepare(url)}.value
             busy=false
-            let alert=NSAlert();alert.messageText="恢复这份完整资料？";alert.informativeText="已核验 \(manifest.files.count) 个文件。应用将在下次启动时恢复，当前数据会保留为安全副本。";alert.addButton(withTitle:"恢复并退出");alert.addButton(withTitle:"取消")
+            let alert=NSAlert();alert.messageText="恢复这份完整资料？";alert.informativeText="已核验 \(manifest.files.count) 个文件。应用将在下次启动时恢复，当前数据会保留为安全副本。备份若包含共享睡眠，将同时恢复搞健康中的睡眠记录，请先退出搞健康；旧备份不改动现有共享睡眠。";alert.addButton(withTitle:"恢复并退出");alert.addButton(withTitle:"取消")
             if alert.runModal() == .alertFirstButtonReturn { try AppBackupRestore.schedule(staged);NSApp.terminate(nil) }
             else {try? FileManager.default.removeItem(at:staged);status="已取消"}
         } catch {busy=false;status="恢复未完成：\(error.localizedDescription)"} }

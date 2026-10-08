@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Privately snapshot and verify Rhythm data without modifying live files.
 
-Quit the app before each check so its 30-second save cannot race the copy:
+Quit Rhythm and Health before each check so shared writes cannot race the copy:
   python3 scripts/upgrade_data.py snapshot --version 4.01
   python3 scripts/upgrade_data.py verify-live /path/returned/as/backup
 
-All data-root and App Group files, including attachments and database sidecars,
+All data-root, App Group and shared-sleep files, including attachments and database sidecars,
 are copied and SHA-256 checked. Preferences are exported read-only. Keychain
 credentials stay in the existing system Keychain and are never exported.
 The current data format/path is preserved; no restoration, migration or deletion
@@ -168,6 +168,20 @@ def inventory(root: Path) -> dict:
             relative = entry.relative_to(root).as_posix()
             files[relative] = {"sha256": file_hash(entry), "bytes": metadata.st_size}
     return {"files": files, "directories": sorted(directories)}
+
+
+def source_inventory(name: str, root: Path) -> dict:
+    # Absence before the first shared-sleep migration is recorded explicitly;
+    # unreadable paths and symlinks are never treated as an empty journal.
+    if name == "shared_sleep":
+        try:
+            root.lstat()
+        except FileNotFoundError:
+            return {"files": {}, "directories": [], "absent": True}
+    listing = inventory(root)
+    if name == "shared_sleep" and "sleep-records.sqlite" not in listing["files"]:
+        fail("existing_shared_sleep_database_missing")
+    return listing
 
 
 def private_write(path: Path, data: bytes) -> None:
@@ -422,7 +436,16 @@ def resolve_roots(args, saved: dict | None = None) -> dict[str, Path]:
         # Resolve macOS /var -> /private/var for test fixtures. Symlinks inside
         # each data tree remain forbidden by inventory().
         result[name] = path.resolve()
-    if result["rhythm"] == result["app_group"] or any(
+    if saved is None or "shared_sleep" in saved or args.shared_sleep_root:
+        default_shared = home / "Library/Group Containers/5G96498KGJ.com.gaoseries.GaoJianKang/SharedSleep"
+        # Fixture invocations must never inspect unrelated real user data.
+        if saved is None and (args.rhythm_root or args.group_root) and not args.shared_sleep_root:
+            default_shared = result["app_group"].parent / "absent-shared-sleep-fixture"
+        shared = Path(args.shared_sleep_root or ((saved or {}).get("shared_sleep")) or default_shared).expanduser().absolute()
+        if shared.is_symlink():
+            fail("unsafe_data_root_symlink")
+        result["shared_sleep"] = shared.resolve()
+    if len(set(result.values())) != len(result) or any(
             a in b.parents for a in result.values() for b in result.values() if a != b):
         fail("overlapping_data_roots")
     return result
@@ -449,7 +472,7 @@ def verify_backup(backup: Path) -> dict:
     manifest = parse_json(data)
     if not isinstance(manifest, dict) or manifest.get("format") != FORMAT or manifest.get("app_id") != APP_ID:
         fail("unsupported_backup_format")
-    if set(manifest["roots"]) != {"rhythm", "app_group"}:
+    if set(manifest["roots"]) not in ({"rhythm", "app_group"}, {"rhythm", "app_group", "shared_sleep"}):
         fail("invalid_backup_roots")
     actual = inventory(backup)
     actual["files"].pop(MANIFEST, None)
@@ -457,10 +480,10 @@ def verify_backup(backup: Path) -> dict:
     if actual != manifest["archive"]:
         fail("backup_file_checksum_failed")
     roots = {name: backup / "payload" / name for name in manifest["roots"]}
-    listings = {name: inventory(root) for name, root in roots.items()}
+    listings = {name: source_inventory(name, root) for name, root in roots.items()}
     if listings != manifest["sources"]:
         fail("backup_source_inventory_failed")
-    if {name: library_summary(root, listings[name]) for name, root in roots.items()} != manifest["libraries"]:
+    if {name: library_summary(roots[name], listings[name]) for name in ("rhythm", "app_group")} != manifest["libraries"]:
         fail("backup_business_integrity_failed")
     for key in manifest["sqlite"]:
         check_sqlite(backup / "sqlite-consistent" / key)
@@ -479,8 +502,8 @@ def snapshot(args) -> dict:
         fail("backup_must_not_enter_source_repository")
     if any(backup_root == root or root in backup_root.parents or backup_root in root.parents for root in roots.values()):
         fail("backup_must_not_overlap_live_data")
-    listings = {name: inventory(root) for name, root in roots.items()}
-    summaries = {name: library_summary(root, listings[name]) for name, root in roots.items()}
+    listings = {name: source_inventory(name, root) for name, root in roots.items()}
+    summaries = {name: library_summary(roots[name], listings[name]) for name in ("rhythm", "app_group")}
     settings = preferences(preferences_dir)
     backup_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(backup_root, 0o700)
@@ -491,13 +514,14 @@ def snapshot(args) -> dict:
         copied_roots = {}
         for name, root in roots.items():
             copied_roots[name] = stage / "payload" / name
-            mirror(root, copied_roots[name], listings[name])
+            if not listings[name].get("absent"):
+                mirror(root, copied_roots[name], listings[name])
         for domain, value in settings.items():
             if value is not None:
                 private_write(stage / "preferences" / (domain + ".plist"),
                               plistlib.dumps(value, fmt=plistlib.FMT_BINARY, sort_keys=True))
         databases = sqlite_snapshots(copied_roots, listings, stage / "sqlite-consistent")
-        if {name: inventory(root) for name, root in roots.items()} != listings:
+        if {name: source_inventory(name, root) for name, root in roots.items()} != listings:
             fail("live_data_changed_during_snapshot")
         if preferences(preferences_dir) != settings:
             fail("preferences_changed_during_snapshot")
@@ -525,13 +549,14 @@ def verify_live(args) -> dict:
     roots = resolve_roots(args, manifest["roots"])
     preferences_dir = (Path(args.preferences_dir).expanduser().resolve() if args.preferences_dir else
                        Path(manifest["preferences_dir"]) if manifest.get("preferences_dir") else None)
-    listings = {name: inventory(root) for name, root in roots.items()}
-    summaries = {name: library_summary(root, listings[name]) for name, root in roots.items()}
-    library_changes = {name: library_differences(manifest["libraries"][name], summaries[name]) for name in roots}
+    listings = {name: source_inventory(name, root) for name, root in roots.items()}
+    summaries = {name: library_summary(roots[name], listings[name]) for name in ("rhythm", "app_group")}
+    library_changes = {name: library_differences(manifest["libraries"][name], summaries[name]) for name in ("rhythm", "app_group")}
     differences = {"files_added": 0, "files_missing": 0, "files_changed": 0,
-                   "directories": 0, "preferences": 0}
+                   "directories": 0, "preferences": 0, "source_presence": 0}
     for name, root in roots.items():
         old, new = manifest["sources"][name], listings[name]
+        differences["source_presence"] += int(bool(old.get("absent")) != bool(new.get("absent")))
         old_files, new_files = old["files"], new["files"]
         differences["files_added"] += len(new_files.keys() - old_files.keys())
         differences["files_missing"] += len(old_files.keys() - new_files.keys())
@@ -555,7 +580,7 @@ def verify_live(args) -> dict:
     # SQLite may update scratch shared memory; only disposable copies are opened.
     with tempfile.TemporaryDirectory(prefix="gao-rhythm-verify-") as scratch:
         databases = sqlite_snapshots(roots, listings, Path(scratch) / "sqlite")
-    if {name: inventory(root) for name, root in roots.items()} != listings:
+    if {name: source_inventory(name, root) for name, root in roots.items()} != listings:
         fail("live_data_changed_during_verification")
     if preferences(preferences_dir) != settings:
         fail("preferences_changed_during_verification")
@@ -577,6 +602,7 @@ def main() -> int:
     for command in (make, check):
         command.add_argument("--rhythm-root", help="Override data root for fixtures")
         command.add_argument("--group-root", help="Override App Group root for fixtures")
+        command.add_argument("--shared-sleep-root", help="Shared sleep directory; explicit absence before migration is allowed")
         command.add_argument("--preferences-dir", help="Read fixture plists instead of macOS defaults")
     args = parser.parse_args()
     try:
