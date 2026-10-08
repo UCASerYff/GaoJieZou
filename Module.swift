@@ -17,6 +17,31 @@ enum RhythmBundle {
     public static func prepareForTermination() {
         RhythmRuntime.store.prepareForTermination()
     }
+
+    public static func backgroundSnapshot() -> RhythmBackgroundSnapshot {
+        let store = RhythmRuntime.store
+        if store.loadFailed { return .init(phase: .dataUnavailable, elapsedSeconds: 0) }
+        if let focus = store.activeFocus {
+            let phase: RhythmBackgroundSnapshot.Phase = focus.segmentStartedAt != nil
+                ? .focusing : (focus.pausedForSystem ? .systemPaused : .paused)
+            return .init(phase: phase, elapsedSeconds: store.focusElapsed())
+        }
+        if store.activeSleep != nil { return .init(phase: .sleeping, elapsedSeconds: store.sleepElapsed()) }
+        return .init(phase: .idle, elapsedSeconds: 0)
+    }
+
+    public static func toggleFocusPause() {
+        let store = RhythmRuntime.store
+        guard !store.loadFailed, let focus = store.activeFocus else { return }
+        if focus.segmentStartedAt == nil { store.resumeFocus() }
+        else { store.pauseFocus() }
+    }
+}
+
+public struct RhythmBackgroundSnapshot {
+    public enum Phase: String { case idle, focusing, paused, systemPaused, sleeping, dataUnavailable }
+    public let phase: Phase
+    public let elapsedSeconds: TimeInterval
 }
 
 public struct RhythmModuleView: View {
