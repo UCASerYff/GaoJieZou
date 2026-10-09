@@ -1,5 +1,17 @@
 import SwiftUI
 
+private enum HabitSheetRoute: Identifiable {
+    case editor(Habit?)
+    case backfill
+
+    var id: String {
+        switch self {
+        case .editor(let habit): "editor.\(habit?.id ?? "new")"
+        case .backfill: "backfill"
+        }
+    }
+}
+
 struct TodayDashboard: View {
     @EnvironmentObject private var store: RhythmStore
     @Binding var selection: RhythmSection
@@ -326,8 +338,7 @@ struct TodayDashboard: View {
 
 struct HabitDashboard: View {
     @EnvironmentObject private var store: RhythmStore
-    @State private var showingEditor = false
-    @State private var editingHabit: Habit?
+    @State private var sheetRoute: HabitSheetRoute?
     @State private var deleteCandidate: Habit?
 
     private let habitColumns = [GridItem(.adaptive(minimum: 210, maximum: 290), spacing: 14)]
@@ -367,8 +378,14 @@ struct HabitDashboard: View {
                     }
                     Spacer()
                     Button {
-                        editingHabit = nil
-                        showingEditor = true
+                        sheetRoute = .backfill
+                    } label: {
+                        Label(RhythmLocalization.text("补打卡"), systemImage: "clock.arrow.circlepath")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.loadFailed)
+                    Button {
+                        sheetRoute = .editor(nil)
                     } label: {
                         Label(RhythmLocalization.text("新建打卡目标"), systemImage: "plus")
                     }
@@ -377,8 +394,7 @@ struct HabitDashboard: View {
 
                 if todayHabits.isEmpty {
                     EmptyStateView(symbol: "checkmark.circle", title: "今天没有打卡目标", message: "新建一个每天或每周重复的目标，完成后可获得庄园金币。", actionTitle: "新建目标") {
-                        editingHabit = nil
-                        showingEditor = true
+                        sheetRoute = .editor(nil)
                     }
                 } else {
                     LazyVGrid(columns: habitColumns, alignment: .leading, spacing: 14) {
@@ -386,8 +402,7 @@ struct HabitDashboard: View {
                             HabitRow(habit: habit) {
                                 store.toggleHabit(habit)
                             } edit: {
-                                editingHabit = habit
-                                showingEditor = true
+                                sheetRoute = .editor(habit)
                             } delete: {
                                 deleteCandidate = habit
                             }
@@ -401,8 +416,7 @@ struct HabitDashboard: View {
                         LazyVGrid(columns: habitColumns, alignment: .leading, spacing: 14) {
                             ForEach(store.habits.filter { !todayHabits.contains($0) }) { habit in
                                 HabitRow(habit: habit, disabled: true, toggle: {}, edit: {
-                                    editingHabit = habit
-                                    showingEditor = true
+                                    sheetRoute = .editor(habit)
                                 }, delete: { deleteCandidate = habit })
                             }
                         }
@@ -414,9 +428,15 @@ struct HabitDashboard: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .sheet(isPresented: $showingEditor) {
-            HabitEditor(habit: editingHabit)
-                .environmentObject(store)
+        .sheet(item: $sheetRoute) { route in
+            switch route {
+            case .editor(let habit):
+                HabitEditor(habit: habit)
+                    .environmentObject(store)
+            case .backfill:
+                HabitBackfillSheet()
+                    .environmentObject(store)
+            }
         }
         .alert(RhythmLocalization.text("删除这个打卡目标？"), isPresented: Binding(
             get: { deleteCandidate != nil },
@@ -483,6 +503,136 @@ struct HabitDashboard: View {
         .frame(minHeight: 166)
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 22).stroke(RhythmTheme.blue.opacity(0.13)))
+    }
+}
+
+private struct HabitBackfillSheet: View {
+    @EnvironmentObject private var store: RhythmStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var saveError: String?
+    @State private var selectedDate = Calendar.current.date(
+        byAdding: .day, value: -1, to: Calendar.current.startOfDay(for: Date())
+    ) ?? Date()
+
+    private var latestAllowedDate: Date {
+        Calendar.current.date(byAdding: .day, value: -1, to: Calendar.current.startOfDay(for: Date())) ?? Date()
+    }
+    private var selectedHabits: [Habit] {
+        store.habits(for: selectedDate, unfinishedFirst: true)
+    }
+    private var completedCount: Int {
+        selectedHabits.filter { store.isHabitCompleted($0, on: selectedDate) }.count
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 18) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(RhythmLocalization.text("补打卡"))
+                        .font(.title2.weight(.semibold))
+                    Text(RhythmLocalization.text("补打卡计入所选日期。每项每天只领取一次金币，取消后再次打卡不会重复领奖。"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                Button(RhythmLocalization.text("完成")) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(22)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 16) {
+                DatePicker(
+                    RhythmLocalization.text("补打卡日期"),
+                    selection: $selectedDate,
+                    in: ...latestAllowedDate,
+                    displayedComponents: .date
+                )
+                .datePickerStyle(.field)
+
+                HStack(spacing: 12) {
+                    Text(RhythmFormatters.date.string(from: selectedDate))
+                        .font(.headline)
+                    Spacer()
+                    Text(RhythmLocalization.format("已完成 %d/%d 项", completedCount, selectedHabits.count))
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+
+                if selectedHabits.isEmpty {
+                    VStack(spacing: 10) {
+                        Image(systemName: "calendar.badge.clock")
+                            .font(.system(size: 30))
+                            .foregroundStyle(RhythmTheme.blue)
+                        Text(RhythmLocalization.text("所选日期没有打卡目标"))
+                            .font(.headline)
+                        Text(RhythmLocalization.text("只能补打目标创建后且安排了打卡的日期。"))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 10) {
+                            ForEach(selectedHabits) { habit in
+                                backfillRow(habit)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(22)
+        }
+        .frame(minWidth: 520, idealWidth: 580, minHeight: 460, idealHeight: 560)
+        .alert(RhythmLocalization.text("打卡未保存"), isPresented: Binding(
+            get: { saveError != nil },
+            set: { if !$0 { saveError = nil } }
+        )) {
+            Button(RhythmLocalization.text("知道了")) { saveError = nil }
+        } message: {
+            Text(saveError ?? "")
+        }
+    }
+
+    private func backfillRow(_ habit: Habit) -> some View {
+        let isCompleted = store.isHabitCompleted(habit, on: selectedDate)
+        return Button {
+            if !store.toggleHabit(habit, on: selectedDate) {
+                saveError = store.notice ?? RhythmLocalization.text("打卡未保存，请重试。")
+                store.notice = nil
+            }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: isCompleted ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isCompleted ? RhythmTheme.teal : Color.secondary)
+                Image(systemName: habit.symbol)
+                    .foregroundStyle(RhythmTheme.blue)
+                    .frame(width: 24)
+                Text(habit.title)
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                Spacer(minLength: 8)
+                Text(RhythmLocalization.text(isCompleted ? "已打卡" : "点击补打卡"))
+                    .font(.caption)
+                    .foregroundStyle(isCompleted ? Color.secondary : RhythmTheme.blue)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isCompleted ? RhythmTheme.teal.opacity(0.06) : RhythmTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.07)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(store.loadFailed)
+        .accessibilityLabel(RhythmLocalization.format(
+            isCompleted ? "取消打卡：%@" : "完成打卡：%@", habit.title
+        ))
+        .accessibilityValue(RhythmFormatters.date.string(from: selectedDate))
     }
 }
 

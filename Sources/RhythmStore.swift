@@ -317,25 +317,55 @@ final class RhythmStore: ObservableObject {
         habitCompletionKeys.contains(RhythmShared.habitKey(habitID: habit.id, date: date))
     }
 
-    func toggleHabit(_ habit: Habit, on date: Date = Date()) {
-        let key = RhythmShared.habitKey(habitID: habit.id, date: date)
+    /// Historical completion uses the same per-day completion/reward keys as
+    /// today's check-in, so statistics and widgets share one record of truth.
+    @discardableResult
+    func toggleHabit(_ habit: Habit, on date: Date = Date()) -> Bool {
+        let calendar = Calendar.current
+        guard !loadFailed,
+              date.timeIntervalSinceReferenceDate.isFinite,
+              calendar.startOfDay(for: date) <= calendar.startOfDay(for: Date()),
+              let currentHabit = habits.first(where: { $0.id == habit.id }),
+              currentHabit.isScheduled(on: date, calendar: calendar) else { return false }
+
+        let previousCompletions = habitCompletionKeys
+        let previousRewards = habitRewardKeys
+        let previousCoins = coins
+        let previousEvents = rewardEvents
+        let previousWidgetDirty = widgetDirty
+        let key = RhythmShared.habitKey(habitID: currentHabit.id, date: date, calendar: calendar)
         if habitCompletionKeys.contains(key) {
             habitCompletionKeys.remove(key)
         } else {
             habitCompletionKeys.insert(key)
             if !habitRewardKeys.contains(key) {
                 habitRewardKeys.insert(key)
-                coins += habit.rewardCoins
+                coins += currentHabit.rewardCoins
+                let isBackfill = !calendar.isDateInToday(date)
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: GQNSLanguage.localeIdentifier)
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .none
                 addReward(
-                    title: RhythmLocalization.text("完成日常打卡"),
-                    detail: RhythmLocalization.format("“%@”为庄园带来了 %d 金币。", habit.title, habit.rewardCoins),
-                    coins: habit.rewardCoins,
-                    symbol: habit.symbol
+                    title: RhythmLocalization.text(isBackfill ? "补打日常打卡" : "完成日常打卡"),
+                    detail: isBackfill
+                        ? RhythmLocalization.format("补打 %@ 的“%@”，获得 %d 金币。", formatter.string(from: date), currentHabit.title, currentHabit.rewardCoins)
+                        : RhythmLocalization.format("“%@”为庄园带来了 %d 金币。", currentHabit.title, currentHabit.rewardCoins),
+                    coins: currentHabit.rewardCoins,
+                    symbol: currentHabit.symbol
                 )
             }
         }
         widgetDirty = true
-        save()
+        guard save() else {
+            habitCompletionKeys = previousCompletions
+            habitRewardKeys = previousRewards
+            coins = previousCoins
+            rewardEvents = previousEvents
+            widgetDirty = previousWidgetDirty
+            return false
+        }
+        return true
     }
 
     func saveHabit(existingID: String?, title: String, symbol: String, weekdays: Set<Int>, rewardCoins: Int) {

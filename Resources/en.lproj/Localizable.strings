@@ -721,3 +721,17 @@
 "显示侧边栏" = "Show Sidebar";
 "节奏、目标与庄园" = "Rhythm, goals and your estate";
 "金币 %d · 鱼饵 %d" = "Coins %1$d · Bait %2$d";
+
+// V4.04 historical habit check-ins
+"打卡未保存" = "Check-in Not Saved";
+"打卡未保存，请重试。" = "The check-in wasn't saved. Please try again.";
+"补打卡" = "Backfill Check-ins";
+"补打卡计入所选日期。每项每天只领取一次金币，取消后再次打卡不会重复领奖。" = "Check-ins count toward the selected date. Each habit earns coins once per day; undoing and checking in again won't award more coins.";
+"补打卡日期" = "Check-in date";
+"已完成 %d/%d 项" = "%1$d/%2$d completed";
+"所选日期没有打卡目标" = "No habits scheduled for this date";
+"只能补打目标创建后且安排了打卡的日期。" = "Choose a scheduled date on or after the habit was created.";
+"已打卡" = "Completed";
+"点击补打卡" = "Check in";
+"补打日常打卡" = "Backfilled Habit Check-in";
+"补打 %@ 的“%@”，获得 %d 金币。" = "Backfilled “%2$@” for %1$@ and earned %3$d coins.";
