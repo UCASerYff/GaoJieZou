@@ -36,6 +36,11 @@ enum RhythmBundle {
         if focus.segmentStartedAt == nil { store.resumeFocus() }
         else { store.pauseFocus() }
     }
+
+    public static func warmup() {
+        RhythmFormatters.warmup()
+        _ = NSDatePicker().intrinsicContentSize
+    }
 }
 
 public struct RhythmBackgroundSnapshot {

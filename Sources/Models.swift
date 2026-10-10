@@ -503,17 +503,39 @@ extension RhythmLibrary {
 }
 
 enum RhythmFormatters {
+    private static var cachedDate: (RhythmLanguage, DateFormatter)?
+    private static var cachedShortDate: (RhythmLanguage, DateFormatter)?
+    private static var cachedTime: (RhythmLanguage, DateFormatter)?
+
+    /// 预热常用格式化器，消除冷启动延迟
+    static func warmup() {
+        _ = date
+        _ = shortDate
+        _ = time
+        _ = month
+    }
+
     static var date: DateFormatter {
+        let currentLang = RhythmLocalization.language
+        if let (lang, formatter) = cachedDate, lang == currentLang {
+            return formatter
+        }
         let formatter = DateFormatter()
-        formatter.locale = RhythmLocalization.language.locale
-        formatter.dateFormat = RhythmLocalization.language == .english ? "MMM d, yyyy" : "yyyy年M月d日"
+        formatter.locale = currentLang.locale
+        formatter.dateFormat = currentLang == .english ? "MMM d, yyyy" : "yyyy年M月d日"
+        cachedDate = (currentLang, formatter)
         return formatter
     }
 
     static var shortDate: DateFormatter {
+        let currentLang = RhythmLocalization.language
+        if let (lang, formatter) = cachedShortDate, lang == currentLang {
+            return formatter
+        }
         let formatter = DateFormatter()
-        formatter.locale = RhythmLocalization.language.locale
-        formatter.dateFormat = RhythmLocalization.language == .english ? "MMM d" : "M月d日"
+        formatter.locale = currentLang.locale
+        formatter.dateFormat = currentLang == .english ? "MMM d" : "M月d日"
+        cachedShortDate = (currentLang, formatter)
         return formatter
     }
 
@@ -523,9 +545,14 @@ enum RhythmFormatters {
     }
 
     static var time: DateFormatter {
+        let currentLang = RhythmLocalization.language
+        if let (lang, formatter) = cachedTime, lang == currentLang {
+            return formatter
+        }
         let formatter = DateFormatter()
-        formatter.locale = RhythmLocalization.language.locale
+        formatter.locale = currentLang.locale
         formatter.dateFormat = "HH:mm"
+        cachedTime = (currentLang, formatter)
         return formatter
     }
 

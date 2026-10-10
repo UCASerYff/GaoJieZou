@@ -544,7 +544,7 @@ struct SleepDashboard: View {
 /// 手动录入睡眠：分别填写小时和分钟，以及哪一晚（就寝日期，默认昨晚）。
 /// 起止时间由 RhythmShared.manualSleepInterval 换算：结束固定在该晚次日 07:00，
 /// 开始 = 结束 - 时长，保证夜晚归属与 lastNightSleepDuration 统计口径一致。
-/// 预估评分随输入实时更新，校验不通过时保存按钮禁用并显示原因。
+/// 采用轻量卡片布局替代 Form(.grouped)，消除首次模态展示时的 Grouped TableView 布局开销。
 private struct ManualSleepEditor: View {
     @EnvironmentObject private var store: RhythmStore
     @EnvironmentObject private var settings: RhythmSettings
@@ -552,14 +552,17 @@ private struct ManualSleepEditor: View {
     @State private var hours = 8
     @State private var minutes = 0
     @State private var night: Date
+    @State private var maxAllowedNight: Date
     /// 保存时才可能命中的错误（查重）；时长问题由下方实时校验拦截。
     @State private var saveError: String?
 
     init() {
         let calendar = Calendar.current
         let now = Date()
+        let todayStart = calendar.startOfDay(for: now)
         let yesterday = calendar.date(byAdding: .day, value: -1, to: now) ?? now
         _night = State(initialValue: calendar.startOfDay(for: yesterday))
+        _maxAllowedNight = State(initialValue: todayStart)
     }
 
     private var durationMinutes: Int? {
@@ -592,72 +595,144 @@ private struct ManualSleepEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(RhythmLocalization.text("手动录入睡眠")).font(.title2.weight(.semibold))
-                    Text(RhythmLocalization.text("保存后会按当前睡眠目标补算一次牧场成长与产出。"))
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(RhythmLocalization.text("取消")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(RhythmLocalization.text("保存")) { save() }
-                    .buttonStyle(.borderedProminent)
-                    .tint(RhythmTheme.purple)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(validationError != nil)
-            }
-            .padding(22)
+            headerBar
             Divider()
-            Form {
-                LabeledContent(RhythmLocalization.text("睡眠时长")) {
-                    HStack(spacing: 8) {
-                        TextField(RhythmLocalization.text("小时"), value: $hours, format: .number)
-                            .labelsHidden()
-                            .frame(width: 62)
-                        Text(RhythmLocalization.text("小时"))
-                        TextField(RhythmLocalization.text("分钟"), value: $minutes, format: .number)
-                            .labelsHidden()
-                            .frame(width: 62)
-                        Text(RhythmLocalization.text("分钟"))
+            ScrollView {
+                VStack(spacing: 16) {
+                    inputSection
+                    previewSection
+                    if let message = validationError ?? saveError {
+                        warningSection(message)
                     }
                 }
+                .padding(22)
+            }
+        }
+        .frame(minWidth: 480, idealWidth: 520, minHeight: 450, idealHeight: 480)
+    }
+
+    private var headerBar: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(RhythmLocalization.text("手动录入睡眠")).font(.title2.weight(.semibold))
+                Text(RhythmLocalization.text("保存后会按当前睡眠目标补算一次牧场成长与产出。"))
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(RhythmLocalization.text("取消")) { dismiss() }
+                .keyboardShortcut(.cancelAction)
+            Button(RhythmLocalization.text("保存")) { save() }
+                .buttonStyle(.borderedProminent)
+                .tint(RhythmTheme.purple)
+                .keyboardShortcut(.defaultAction)
+                .disabled(validationError != nil)
+        }
+        .padding(22)
+    }
+
+    private var inputSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(RhythmLocalization.text("基本信息"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.tertiary)
+
+            HStack(spacing: 16) {
+                Text(RhythmLocalization.text("睡眠时长"))
+                    .font(.callout.weight(.medium))
+                    .frame(width: 90, alignment: .leading)
+                HStack(spacing: 8) {
+                    TextField(RhythmLocalization.text("小时"), value: $hours, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60)
+                    Text(RhythmLocalization.text("小时"))
+                        .font(.callout)
+                    TextField(RhythmLocalization.text("分钟"), value: $minutes, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 60)
+                    Text(RhythmLocalization.text("分钟"))
+                        .font(.callout)
+                }
+                Spacer()
+            }
+
+            Divider().opacity(0.6)
+
+            HStack(spacing: 16) {
+                Text(RhythmLocalization.text("就寝日期"))
+                    .font(.callout.weight(.medium))
+                    .frame(width: 90, alignment: .leading)
                 DatePicker(
-                    RhythmLocalization.text("哪晚（就寝日期）"),
+                    "",
                     selection: $night,
-                    in: ...Date(),
+                    in: ...maxAllowedNight,
                     displayedComponents: .date
                 )
                 .datePickerStyle(.field)
-                Section {
-                    LabeledContent(RhythmLocalization.text("睡眠时长")) {
-                        Text(RhythmFormatters.duration(max(0, duration), showSeconds: false))
-                            .monospacedDigit()
-                    }
-                    LabeledContent(RhythmLocalization.text("换算起止")) {
-                        Text("\(RhythmFormatters.shortDate.string(from: interval.start)) \(RhythmFormatters.time.string(from: interval.start)) → \(RhythmFormatters.shortDate.string(from: interval.end)) \(RhythmFormatters.time.string(from: interval.end))")
-                            .monospacedDigit()
-                    }
-                    LabeledContent(RhythmLocalization.text("预估评分")) {
-                        Text(RhythmLocalization.format("%d 分", estimatedScore))
-                            .monospacedDigit()
-                    }
-                } header: {
-                    Text(RhythmLocalization.format("按当前目标 %.1f 小时估算", settings.sleepTargetHours))
-                } footer: {
-                    Text(RhythmLocalization.text("起床时间按次日早上 7:00 固定换算，统计会记在你选的那晚。"))
+                .labelsHidden()
+                Spacer()
+            }
+        }
+        .padding(16)
+        .background(RhythmTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.07)))
+    }
+
+    private var previewSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(RhythmLocalization.text("结算换算"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                Spacer()
+                Text(RhythmLocalization.format("按当前目标 %.1f 小时估算", settings.sleepTargetHours))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            VStack(spacing: 10) {
+                HStack {
+                    Text(RhythmLocalization.text("睡眠时长")).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(RhythmFormatters.duration(max(0, duration), showSeconds: false))
+                        .monospacedDigit().font(.callout.weight(.semibold))
                 }
-                if let message = validationError ?? saveError {
-                    Section {
-                        Label(message, systemImage: "exclamationmark.triangle.fill")
-                            .font(.callout)
-                            .foregroundStyle(RhythmTheme.orange)
-                    }
+                HStack {
+                    Text(RhythmLocalization.text("换算起止")).foregroundStyle(.secondary)
+                    Spacer()
+                    Text("\(RhythmFormatters.shortDate.string(from: interval.start)) \(RhythmFormatters.time.string(from: interval.start)) → \(RhythmFormatters.shortDate.string(from: interval.end)) \(RhythmFormatters.time.string(from: interval.end))")
+                        .monospacedDigit().font(.callout)
+                }
+                HStack {
+                    Text(RhythmLocalization.text("预估评分")).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(RhythmLocalization.format("%d 分", estimatedScore))
+                        .monospacedDigit().font(.callout.weight(.semibold))
+                        .foregroundStyle(estimatedScore >= 80 ? RhythmTheme.teal : RhythmTheme.orange)
                 }
             }
-            .formStyle(.grouped)
+            .font(.callout)
+
+            Divider().opacity(0.6)
+
+            Text(RhythmLocalization.text("起床时间按次日早上 7:00 固定换算，统计会记在你选的那晚。"))
+                .font(.caption2).foregroundStyle(.tertiary)
         }
-        .frame(minWidth: 460, idealWidth: 500, minHeight: 420, idealHeight: 460)
+        .padding(16)
+        .background(RhythmTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.07)))
+    }
+
+    private func warningSection(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(RhythmTheme.orange)
+            Text(message)
+                .font(.callout)
+                .foregroundStyle(RhythmTheme.orange)
+            Spacer()
+        }
+        .padding(12)
+        .background(RhythmTheme.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 
     private func save() {

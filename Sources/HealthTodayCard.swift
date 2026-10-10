@@ -1,6 +1,7 @@
 import Foundation
 import SQLite3
 import SwiftUI
+import Combine
 
 /// 联动③：搞节奏「今日」页只读展示搞健康当日数据。
 /// 直接以只读方式打开 App Group 的 Health/health.sqlite（WAL），绝不写库。

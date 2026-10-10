@@ -128,6 +128,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         lifecycleLog.record("automatic_termination.disabled")
         UNUserNotificationCenter.current().delegate = self
         resident.start()
+        DispatchQueue.main.async { RhythmApplicationLifecycle.warmup() }
         windowObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] note in
             guard let window = note.object as? NSWindow,
                   window.identifier?.rawValue.hasPrefix("main") == true else { return }
