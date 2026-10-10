@@ -183,39 +183,50 @@ struct FocusDashboard: View {
             if planted.isEmpty {
                 Text(RhythmLocalization.text("庄园里还没有作物。先去农场播种，下一次专注就会转化为成长时间。"))
                     .font(.callout).foregroundStyle(.secondary)
-            } else {
+            } else if store.activeFocus != nil {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 16)], spacing: 18) {
-                        ForEach(planted) { plot in
-                            if let crop = RhythmCatalog.crop(plot.cropID) {
-                                let progress = store.farmGrowthProgress(for: plot, at: context.date)
-                                VStack(spacing: 5) {
-                                    Text(crop.emoji).font(.system(size: 28))
-                                    Text(crop.displayName).font(.caption)
-                                    Text("\(Int(progress * 100))%")
-                                        .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                                    Text(progress >= 1
-                                        ? RhythmLocalization.text("已成熟")
-                                        : RhythmLocalization.format("%@ 后成熟", RhythmFormatters.duration(store.farmMaturityRemainingSeconds(for: plot))))
-                                        .font(.system(size: 9, weight: .semibold).monospacedDigit())
-                                        .foregroundStyle(progress >= 1 ? RhythmTheme.orange : RhythmTheme.green)
-                                        .lineLimit(1)
-                                    ProgressView(value: progress)
-                                        .tint(RhythmTheme.green)
-                                        .frame(maxWidth: 80)
-                                        .animation(.linear(duration: 1), value: progress)
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                        }
-                    }
+                    farmPlotsGrid(planted: planted, at: context.date)
                 }
+            } else {
+                farmPlotsGrid(planted: planted, at: Date())
             }
         }
         .padding(16)
         .background(RhythmTheme.panel, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.07)))
     }
+
+    private func farmPlotsGrid(planted: [FarmPlot], at date: Date) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 16)], spacing: 18) {
+            ForEach(planted) { plot in
+                if let crop = RhythmCatalog.crop(plot.cropID) {
+                    let progress = store.farmGrowthProgress(for: plot, at: date)
+                    VStack(spacing: 5) {
+                        Text(crop.emoji).font(.system(size: 28))
+                        Text(crop.displayName).font(.caption)
+                        Text("\(Int(progress * 100))%")
+                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                        Text(progress >= 1
+                            ? RhythmLocalization.text("已成熟")
+                            : RhythmLocalization.format("%@ 后成熟", RhythmFormatters.duration(store.farmMaturityRemainingSeconds(for: plot))))
+                            .font(.system(size: 9, weight: .semibold).monospacedDigit())
+                            .foregroundStyle(progress >= 1 ? RhythmTheme.orange : RhythmTheme.green)
+                            .lineLimit(1)
+                        ProgressView(value: progress)
+                            .tint(RhythmTheme.green)
+                            .frame(maxWidth: 80)
+                            .animation(.linear(duration: 1), value: progress)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
+    }
+}
+
+private enum SleepSheetRoute: Identifiable {
+    case manualEntry
+    var id: String { "manualEntry" }
 }
 
 struct SleepDashboard: View {
@@ -224,7 +235,7 @@ struct SleepDashboard: View {
     @State private var proposedStart = Date()
     @State private var proposedStartIsCustom = false
     @State private var confirmCancel = false
-    @State private var showingManualEntry = false
+    @State private var sheetRoute: SleepSheetRoute?
     @State private var showingTimerEntry = false
 
     var body: some View {
@@ -303,7 +314,6 @@ struct SleepDashboard: View {
                         if store.sleepRecords.count > 100 {
                             Text(RhythmLocalization.format("仅显示最近 100 条，共 %d 条", store.sleepRecords.count))
                                 .font(.caption)
-                                .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.top, 4)
                         }
@@ -317,10 +327,13 @@ struct SleepDashboard: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .sheet(isPresented: $showingManualEntry) {
-            ManualSleepEditor()
-                .environmentObject(store)
-                .environmentObject(settings)
+        .sheet(item: $sheetRoute) { route in
+            switch route {
+            case .manualEntry:
+                ManualSleepEditor()
+                    .environmentObject(store)
+                    .environmentObject(settings)
+            }
         }
         .alert(RhythmLocalization.text("放弃这次睡眠记录？"), isPresented: $confirmCancel) {
             Button(RhythmLocalization.text("保留计时"), role: .cancel) {}
@@ -345,47 +358,12 @@ struct SleepDashboard: View {
             if store.pastureAnimals.isEmpty {
                 Text(RhythmLocalization.text("牧场里还没有动物。幼崽会随睡眠实时成长，成年动物会显示本次产出进度。"))
                     .font(.callout).foregroundStyle(.secondary)
-            } else {
+            } else if store.activeSleep != nil {
                 TimelineView(.periodic(from: .now, by: 1)) { context in
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 12)], spacing: 18) {
-                        ForEach(store.pastureAnimals) { resident in
-                            if let animal = RhythmCatalog.animal(resident.animalID) {
-                                let isAdult = resident.growthHours >= animal.maturitySleepHours
-                                let growthProgress = store.pastureGrowthProgress(for: resident, at: context.date)
-                                let productionProgress = store.pastureProductionProgress(targetHours: settings.sleepTargetHours, at: context.date)
-                                let maturityRemaining = store.pastureMaturityRemainingSeconds(for: resident)
-                                let productionRemaining = store.pastureProductionRemainingSeconds(targetHours: settings.sleepTargetHours, at: context.date)
-                                VStack(spacing: 5) {
-                                    Text(animal.emoji).font(.system(size: 28))
-                                    Text(animal.displayName).font(.caption).lineLimit(1)
-                                    if isAdult, store.activeSleep == nil {
-                                        Text(RhythmLocalization.format("已成年 · 待收 %d", resident.pendingProducts))
-                                            .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                                    } else {
-                                        let progress = isAdult ? productionProgress : growthProgress
-                                        Text(RhythmLocalization.format(isAdult ? "本次产出 %d%%" : "成长 %d%%", Int(progress * 100)))
-                                            .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
-                                        Text(isAdult
-                                            ? (productionRemaining > 0
-                                                ? RhythmLocalization.format("%@ 后出产", RhythmFormatters.duration(productionRemaining))
-                                                : RhythmLocalization.text("本次已出产"))
-                                            : (maturityRemaining > 0
-                                                ? RhythmLocalization.format("%@ 后成年", RhythmFormatters.duration(maturityRemaining))
-                                                : RhythmLocalization.text("已成年")))
-                                            .font(.system(size: 8, weight: .semibold).monospacedDigit())
-                                            .foregroundStyle(isAdult ? RhythmTheme.purple : RhythmTheme.orange)
-                                            .lineLimit(1)
-                                        ProgressView(value: progress)
-                                            .tint(isAdult ? RhythmTheme.purple : RhythmTheme.orange)
-                                            .frame(maxWidth: 78)
-                                            .animation(.linear(duration: 1), value: progress)
-                                    }
-                                }
-                                .frame(maxWidth: .infinity)
-                            }
-                        }
-                    }
+                    pastureAnimalsGrid(at: context.date)
                 }
+            } else {
+                pastureAnimalsGrid(at: Date())
             }
 
             Text(RhythmLocalization.text("成长与产出会在计时过程中逐秒生效并自动保存，无需等待结束睡眠。"))
@@ -394,6 +372,47 @@ struct SleepDashboard: View {
         .padding(16)
         .background(RhythmTheme.panel, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(RhythmTheme.purple.opacity(0.15)))
+    }
+
+    private func pastureAnimalsGrid(at date: Date) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 120), spacing: 12)], spacing: 18) {
+            ForEach(store.pastureAnimals) { resident in
+                if let animal = RhythmCatalog.animal(resident.animalID) {
+                    let isAdult = resident.growthHours >= animal.maturitySleepHours
+                    let growthProgress = store.pastureGrowthProgress(for: resident, at: date)
+                    let productionProgress = store.pastureProductionProgress(targetHours: settings.sleepTargetHours, at: date)
+                    let maturityRemaining = store.pastureMaturityRemainingSeconds(for: resident)
+                    let productionRemaining = store.pastureProductionRemainingSeconds(targetHours: settings.sleepTargetHours, at: date)
+                    VStack(spacing: 5) {
+                        Text(animal.emoji).font(.system(size: 28))
+                        Text(animal.displayName).font(.caption).lineLimit(1)
+                        if isAdult, store.activeSleep == nil {
+                            Text(RhythmLocalization.format("已成年 · 待收 %d", resident.pendingProducts))
+                                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                        } else {
+                            let progress = isAdult ? productionProgress : growthProgress
+                            Text(RhythmLocalization.format(isAdult ? "本次产出 %d%%" : "成长 %d%%", Int(progress * 100)))
+                                .font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(isAdult
+                                ? (productionRemaining > 0
+                                    ? RhythmLocalization.format("%@ 后出产", RhythmFormatters.duration(productionRemaining))
+                                    : RhythmLocalization.text("本次已出产"))
+                                : (maturityRemaining > 0
+                                    ? RhythmLocalization.format("%@ 后成年", RhythmFormatters.duration(maturityRemaining))
+                                    : RhythmLocalization.text("已成年")))
+                                .font(.system(size: 8, weight: .semibold).monospacedDigit())
+                                .foregroundStyle(isAdult ? RhythmTheme.purple : RhythmTheme.orange)
+                                .lineLimit(1)
+                            ProgressView(value: progress)
+                                .tint(isAdult ? RhythmTheme.purple : RhythmTheme.orange)
+                                .frame(maxWidth: 78)
+                                .animation(.linear(duration: 1), value: progress)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+        }
     }
 
     private var startSleepPanel: some View {
@@ -418,7 +437,7 @@ struct SleepDashboard: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    showingManualEntry = true
+                    sheetRoute = .manualEntry
                 } label: {
                     Label(RhythmLocalization.text("记录睡眠"), systemImage: "square.and.pencil")
                 }
@@ -429,60 +448,63 @@ struct SleepDashboard: View {
 
             // 次要入口：睡眠计时（折叠保留，不删除）
             DisclosureGroup(isExpanded: $showingTimerEntry) {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text(RhythmLocalization.text("计时采用开始与结束时间差，锁屏、熄屏、合盖和系统睡眠都会继续。"))
-                        .font(.callout).foregroundStyle(.secondary)
+                if showingTimerEntry {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(RhythmLocalization.text("计时采用开始与结束时间差，锁屏、熄屏、合盖和系统睡眠都会继续。"))
+                            .font(.callout).foregroundStyle(.secondary)
 
-                    TimelineView(.periodic(from: .now, by: 1)) { timeline in
                         DatePicker(
                             RhythmLocalization.text("入睡计时开始于"),
-                            selection: Binding(
-                                get: { proposedStartIsCustom ? proposedStart : timeline.date },
-                                set: { value in
-                                    proposedStart = value
-                                    proposedStartIsCustom = true
-                                }
-                            ),
-                            in: ...timeline.date
+                            selection: $proposedStart,
+                            in: ...Date()
                         )
                         .datePickerStyle(.field)
-                    }
-
-                    if proposedStartIsCustom {
-                        Button(RhythmLocalization.text("改为从现在开始")) { proposedStartIsCustom = false }
-                            .font(.callout)
-                    }
-                    if store.activeFocus != nil {
-                        Label(RhythmLocalization.text("请先结束工作专注，再开始睡眠计时。"), systemImage: "timer")
-                            .font(.callout).foregroundStyle(RhythmTheme.orange)
-                    }
-
-                    HStack(spacing: 10) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(RhythmTheme.orange)
-                        Text(RhythmLocalization.text("可以锁屏或合盖；如果关机，请在下次开机后打开“搞节奏”结束记录。开始时间会立即保存，不会丢失。"))
-                            .font(.callout).foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .padding(12)
-                    .background(RhythmTheme.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-
-                    HStack {
-                        Text(RhythmLocalization.text("达到睡眠目标的一半和全部时，成年动物会各实时产出 1 份产品。"))
-                            .font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        Button {
-                            store.startSleep(at: proposedStartIsCustom ? proposedStart : Date(), targetHours: settings.sleepTargetHours)
-                            if store.activeSleep != nil { proposedStartIsCustom = false }
-                        } label: {
-                            Label(RhythmLocalization.text("开始睡眠计时"), systemImage: "moon.fill")
+                        .onChange(of: proposedStart) { _ in
+                            proposedStartIsCustom = true
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .disabled(store.activeFocus != nil)
+
+                        if proposedStartIsCustom {
+                            Button(RhythmLocalization.text("改为从现在开始")) {
+                                proposedStart = Date()
+                                proposedStartIsCustom = false
+                            }
+                            .font(.callout)
+                        }
+                        if store.activeFocus != nil {
+                            Label(RhythmLocalization.text("请先结束工作专注，再开始睡眠计时。"), systemImage: "timer")
+                                .font(.callout).foregroundStyle(RhythmTheme.orange)
+                        }
+
+                        HStack(spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(RhythmTheme.orange)
+                            Text(RhythmLocalization.text("可以锁屏或合盖；如果关机，请在下次开机后打开“搞节奏”结束记录。开始时间会立即保存，不会丢失。"))
+                                .font(.callout).foregroundStyle(.secondary)
+                            Spacer()
+                        }
+                        .padding(12)
+                        .background(RhythmTheme.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+
+                        HStack {
+                            Text(RhythmLocalization.text("达到睡眠目标的一半和全部时，成年动物会各实时产出 1 份产品。"))
+                                .font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button {
+                                store.startSleep(at: proposedStartIsCustom ? proposedStart : Date(), targetHours: settings.sleepTargetHours)
+                                if store.activeSleep != nil {
+                                    proposedStart = Date()
+                                    proposedStartIsCustom = false
+                                }
+                            } label: {
+                                Label(RhythmLocalization.text("开始睡眠计时"), systemImage: "moon.fill")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .disabled(store.activeFocus != nil)
+                        }
                     }
+                    .padding(.top, 12)
                 }
-                .padding(.top, 12)
             } label: {
                 Label(RhythmLocalization.text("改用睡眠计时"), systemImage: "timer")
                     .font(.callout.weight(.medium))
