@@ -224,7 +224,7 @@ struct FocusDashboard: View {
     }
 }
 
-private enum SleepSheetRoute: Identifiable {
+private enum SleepSheetRoute: Identifiable, Equatable {
     case manualEntry
     var id: String { "manualEntry" }
 }
@@ -327,14 +327,45 @@ struct SleepDashboard: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .sheet(item: $sheetRoute) { route in
-            switch route {
-            case .manualEntry:
-                ManualSleepEditor()
-                    .environmentObject(store)
-                    .environmentObject(settings)
+        .overlay {
+            if let route = sheetRoute {
+                ZStack {
+                    Color.black.opacity(0.35)
+                        .ignoresSafeArea()
+                        .onTapGesture {
+                            withAnimation(.easeInOut(duration: 0.15)) {
+                                sheetRoute = nil
+                            }
+                        }
+
+                    Group {
+                        switch route {
+                        case .manualEntry:
+                            ManualSleepEditor(onDismiss: {
+                                withAnimation(.easeInOut(duration: 0.15)) {
+                                    sheetRoute = nil
+                                }
+                            })
+                            .environmentObject(store)
+                            .environmentObject(settings)
+                        }
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color(nsColor: .windowBackgroundColor))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.28), radius: 30, x: 0, y: 14)
+                    .padding(32)
+                }
+                .transition(.opacity.combined(with: .scale(scale: 0.98)))
+                .zIndex(100)
             }
         }
+        .animation(.easeInOut(duration: 0.16), value: sheetRoute)
         .alert(RhythmLocalization.text("放弃这次睡眠记录？"), isPresented: $confirmCancel) {
             Button(RhythmLocalization.text("保留计时"), role: .cancel) {}
             Button(RhythmLocalization.text("放弃记录"), role: .destructive) { store.cancelSleep() }
@@ -437,7 +468,9 @@ struct SleepDashboard: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
                 Button {
-                    sheetRoute = .manualEntry
+                    withAnimation(.easeInOut(duration: 0.15)) {
+                        sheetRoute = .manualEntry
+                    }
                 } label: {
                     Label(RhythmLocalization.text("记录睡眠"), systemImage: "square.and.pencil")
                 }
@@ -570,7 +603,8 @@ struct SleepDashboard: View {
 private struct ManualSleepEditor: View {
     @EnvironmentObject private var store: RhythmStore
     @EnvironmentObject private var settings: RhythmSettings
-    @Environment(\.dismiss) private var dismiss
+    var onDismiss: () -> Void = {}
+
     @State private var hours = 8
     @State private var minutes = 0
     @State private var night: Date
@@ -578,7 +612,8 @@ private struct ManualSleepEditor: View {
     /// 保存时才可能命中的错误（查重）；时长问题由下方实时校验拦截。
     @State private var saveError: String?
 
-    init() {
+    init(onDismiss: @escaping () -> Void = {}) {
+        self.onDismiss = onDismiss
         let calendar = Calendar.current
         let now = Date()
         let todayStart = calendar.startOfDay(for: now)
@@ -631,6 +666,9 @@ private struct ManualSleepEditor: View {
             }
         }
         .frame(minWidth: 480, idealWidth: 520, minHeight: 450, idealHeight: 480)
+        .onExitCommand {
+            onDismiss()
+        }
     }
 
     private var headerBar: some View {
@@ -641,12 +679,14 @@ private struct ManualSleepEditor: View {
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
-            Button(RhythmLocalization.text("取消")) { dismiss() }
+            Button(RhythmLocalization.text("取消")) { onDismiss() }
                 .keyboardShortcut(.cancelAction)
+                .accessibilityLabel(RhythmLocalization.text("取消"))
             Button(RhythmLocalization.text("保存")) { save() }
                 .buttonStyle(.borderedProminent)
                 .tint(RhythmTheme.purple)
                 .keyboardShortcut(.defaultAction)
+                .accessibilityLabel(RhythmLocalization.text("保存"))
                 .disabled(validationError != nil)
         }
         .padding(22)
@@ -761,7 +801,7 @@ private struct ManualSleepEditor: View {
         saveError = nil
         switch store.addManualSleep(start: interval.start, end: interval.end, targetHours: settings.sleepTargetHours) {
         case .added:
-            dismiss()
+            onDismiss()
         case .invalidRange:
             saveError = RhythmLocalization.text("起床时间必须晚于就寝时间，且不能晚于现在。")
         case .invalidDuration:
