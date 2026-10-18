@@ -23,7 +23,7 @@ final class RhythmRealtimeEngine {
     private var workspaceObservers: [NSObjectProtocol] = []
     private var realtimeTimer: AnyCancellable?
     private var focusActivity: NSObjectProtocol?
-    private var lastRealtimeSaveAt = Date.distantPast
+    private var lastRealtimeSaveAttemptAt = Date.distantPast
 
     /// 每秒计时回调，参数为计时器触发时间。
     var tickHandler: (Date) -> Void = { _ in }
@@ -40,6 +40,9 @@ final class RhythmRealtimeEngine {
     /// Keep user-started focus responsive with all windows closed. Allow idle
     /// system sleep so the existing lock/sleep pause policy remains effective.
     func setFocusRunning(_ running: Bool) {
+#if WIDGET_SYNC_TEST
+        return
+#else
         if running, focusActivity == nil {
             focusActivity = ProcessInfo.processInfo.beginActivity(
                 options: .userInitiatedAllowingIdleSystemSleep,
@@ -49,6 +52,7 @@ final class RhythmRealtimeEngine {
             ProcessInfo.processInfo.endActivity(activity)
             focusActivity = nil
         }
+#endif
     }
 
     deinit {
@@ -159,8 +163,10 @@ final class RhythmRealtimeEngine {
             store.activeSleep = sleep
         }
 
-        if persist || (changed && date.timeIntervalSince(lastRealtimeSaveAt) >= Self.realtimeSaveInterval) {
-            lastRealtimeSaveAt = date
+        if persist || (changed && date.timeIntervalSince(lastRealtimeSaveAttemptAt) >= Self.realtimeSaveInterval) {
+            // Store owns the pending-commit bit; a failed commit is retried even
+            // when `changed` becomes false, without attempting I/O every second.
+            lastRealtimeSaveAttemptAt = date
             store.save()
         }
     }

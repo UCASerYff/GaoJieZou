@@ -12,7 +12,7 @@ final class RhythmSleepSync {
     var enabled: Bool {
         let environment = ProcessInfo.processInfo.environment
         if environment["GAOSERIES_SLEEP_TEST_DIRECTORY"] != nil { return true }
-#if SMOKE_TEST
+#if SMOKE_TEST || WIDGET_SYNC_TEST
         return false
 #else
         return environment["GAOJIEZOU_DATA_DIR"] == nil

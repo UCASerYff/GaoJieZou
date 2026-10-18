@@ -110,14 +110,21 @@ struct RhythmWidgetMonthlyOverviewView: View {
             Array(dates[$0..<min($0 + 7, dates.count)]) + Array<Date?>(repeating: nil, count: max(0, 7 - min(7, dates.count - $0)))
         }
     }
-    private var events: [RhythmWidgetEvent] { widgetEvents(from: entry.data, calendar: calendar) }
     private var weekdayTitles: [String] {
         let base = RhythmWidgetLocale.english ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] : ["日", "一", "二", "三", "四", "五", "六"]
         let offset = calendar.firstWeekday - 1
         return Array(base[offset...] + base[..<offset])
     }
 
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if let data = entry.data {
+            content(data: data)
+        } else {
+            RhythmWidgetUnavailableView()
+        }
+    }
+
+    private func content(data: RhythmWidgetData) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
                 Label(RhythmWidgetLocale.english ? "Monthly overview" : "月度总览", systemImage: "calendar")
@@ -135,10 +142,11 @@ struct RhythmWidgetMonthlyOverviewView: View {
             GeometryReader { proxy in
                 VStack(spacing: 3) {
                     ForEach(weeks.indices, id: \.self) { index in
-                        RhythmWidgetMonthWeekView(week: weeks[index], events: events, data: entry.data, referenceDate: entry.date, calendar: calendar, height: max(20, (proxy.size.height - CGFloat(weeks.count - 1) * 3) / CGFloat(max(1, weeks.count))))
+                        RhythmWidgetMonthWeekView(week: weeks[index], events: widgetEvents(from: data, calendar: calendar), data: data, referenceDate: entry.date, calendar: calendar, height: max(20, (proxy.size.height - CGFloat(weeks.count - 1) * 3) / CGFloat(max(1, weeks.count))))
                     }
                 }
             }
+            RhythmWidgetFreshnessView(snapshot: entry.snapshot)
         }
         .padding(8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -211,18 +219,34 @@ private struct RhythmWidgetMonthWeekView: View {
 
 struct RhythmWidgetMetricsView: View {
     let entry: RhythmWidgetEntry
-    var body: some View {
-        let stats = entry.data.habitStats(on: entry.date)
-        VStack(alignment: .leading, spacing: 7) {
+    @ViewBuilder var body: some View {
+        if let data = entry.data {
+            content(data: data)
+        } else {
+            RhythmWidgetUnavailableView()
+        }
+    }
+
+    private func content(data: RhythmWidgetData) -> some View {
+        let stats = data.habitStats(on: entry.date)
+        let retained = entry.snapshot.source == .previous
+        let focusReference = retained ? min(entry.date, entry.snapshot.generatedAt ?? entry.snapshot.readAt) : entry.date
+        return VStack(alignment: .leading, spacing: 5) {
             Label(RhythmWidgetLocale.english ? "Rhythm" : "搞节奏", systemImage: "leaf.fill")
                 .font(.headline.weight(.bold))
                 .foregroundStyle(RhythmWidgetTheme.green)
             RhythmWidgetMetricRow(symbol: "checkmark.circle.fill", tint: RhythmWidgetTheme.teal,
                                   value: "\(stats.completed)/\(stats.total)", label: RhythmWidgetLocale.english ? "Today's goals" : "今日目标")
-            RhythmWidgetMetricRow(symbol: "timer", tint: RhythmWidgetTheme.blue,
-                                  value: RhythmWidgetLocale.duration(entry.data.focusSeconds(on: entry.date, now: entry.date)), label: RhythmWidgetLocale.english ? "Focus today" : "今日专注")
+            if !retained, let interval = data.focusTimerInterval(on: entry.date, referenceDate: entry.date) {
+                RhythmWidgetMetricRow(symbol: "timer", tint: RhythmWidgetTheme.blue,
+                                      timerInterval: interval, label: RhythmWidgetLocale.english ? "Focus today · running" : "今日专注 · 进行中")
+            } else {
+                RhythmWidgetMetricRow(symbol: "timer", tint: RhythmWidgetTheme.blue,
+                                      value: RhythmWidgetLocale.duration(data.focusSeconds(on: entry.date, now: focusReference)), label: RhythmWidgetLocale.english ? "Focus today" : "今日专注")
+            }
             RhythmWidgetMetricRow(symbol: "moon.stars.fill", tint: RhythmWidgetTheme.purple,
-                                  value: entry.data.lastNightSleepDuration(on: entry.date).map(RhythmWidgetLocale.duration) ?? "—", label: RhythmWidgetLocale.english ? "Last night's sleep" : "昨夜睡眠")
+                                  value: data.lastNightSleepDuration(on: entry.date).map(RhythmWidgetLocale.duration) ?? "—", label: data.activeSleep == nil || retained ? (RhythmWidgetLocale.english ? "Last night's sleep" : "昨夜睡眠") : (RhythmWidgetLocale.english ? "Last night · sleeping" : "昨夜睡眠 · 睡眠中"))
+            RhythmWidgetFreshnessView(snapshot: entry.snapshot)
         }
         .padding(8)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -240,15 +264,39 @@ private extension RhythmWidgetTheme {
 private struct RhythmWidgetMetricRow: View {
     let symbol: String
     let tint: Color
-    let value: String
+    let value: String?
+    let timerInterval: ClosedRange<Date>?
     let label: String
+
+    init(symbol: String, tint: Color, value: String, label: String) {
+        self.symbol = symbol
+        self.tint = tint
+        self.value = value
+        self.timerInterval = nil
+        self.label = label
+    }
+
+    init(symbol: String, tint: Color, timerInterval: ClosedRange<Date>, label: String) {
+        self.symbol = symbol
+        self.tint = tint
+        self.value = nil
+        self.timerInterval = timerInterval
+        self.label = label
+    }
 
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: symbol).foregroundStyle(tint).frame(width: 17)
             VStack(alignment: .leading, spacing: 1) {
-                Text(value).font(.system(size: 13, weight: .bold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
-                Text(label).font(.caption2).foregroundStyle(.secondary)
+                Group {
+                    if let timerInterval {
+                        Text(timerInterval: timerInterval, countsDown: false, showsHours: true)
+                    } else {
+                        Text(value ?? "—")
+                    }
+                }
+                .font(.system(size: 13, weight: .bold).monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7)
+                Text(label).font(.caption2).foregroundStyle(.secondary).lineLimit(1).minimumScaleFactor(0.75)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -258,32 +306,42 @@ private struct RhythmWidgetMetricRow: View {
 struct RhythmWidgetGoalsView: View {
     let entry: RhythmWidgetEntry
 
-    private var rows: [(goal: RhythmWidgetData.LongGoal, completed: Int, total: Int)] {
-        dataRows.sorted { lhs, rhs in
+    private func rows(data: RhythmWidgetData) -> [(goal: RhythmWidgetData.LongGoal, completed: Int, total: Int)] {
+        dataRows(data: data).sorted { lhs, rhs in
             let leftDate = lhs.goal.createdAt ?? .distantPast
             let rightDate = rhs.goal.createdAt ?? .distantPast
             if leftDate != rightDate { return leftDate > rightDate }
             // Arrays in older archives were appended in creation order.
-            return (entry.data.longGoals.firstIndex { $0.id == lhs.goal.id } ?? 0)
-                > (entry.data.longGoals.firstIndex { $0.id == rhs.goal.id } ?? 0)
+            return (data.longGoals.firstIndex { $0.id == lhs.goal.id } ?? 0)
+                > (data.longGoals.firstIndex { $0.id == rhs.goal.id } ?? 0)
         }
     }
 
-    private var dataRows: [(goal: RhythmWidgetData.LongGoal, completed: Int, total: Int)] {
-        entry.data.longGoals.map { goal in
-            let actions = entry.data.shortActions.filter { $0.goalID == goal.id }
+    private func dataRows(data: RhythmWidgetData) -> [(goal: RhythmWidgetData.LongGoal, completed: Int, total: Int)] {
+        data.longGoals.map { goal in
+            let actions = data.shortActions.filter { $0.goalID == goal.id }
             return (goal, actions.filter(\.isCompleted).count, actions.count)
         }
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+    @ViewBuilder var body: some View {
+        if let data = entry.data {
+            content(data: data)
+        } else {
+            RhythmWidgetUnavailableView()
+        }
+    }
+
+    private func content(data: RhythmWidgetData) -> some View {
+        let rows = rows(data: data)
+        return VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Label(RhythmWidgetLocale.english ? "Long-term goals" : "长期目标", systemImage: "flag.checkered")
                     .font(.headline.weight(.bold))
                 Spacer()
                 Text("\(rows.count)").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             }
+            RhythmWidgetFreshnessView(snapshot: entry.snapshot)
             if rows.isEmpty {
                 Text(RhythmWidgetLocale.english ? "No long-term goals yet." : "还没有长期目标。")
                     .font(.caption).foregroundStyle(.secondary)
@@ -321,5 +379,60 @@ struct RhythmWidgetGoalsView: View {
         .background(Color.white)
         .containerBackground(for: .widget) { Color.white }
         .widgetURL(URL(string: "gaojiezou://longGoals"))
+    }
+}
+
+private struct RhythmWidgetFreshnessView: View {
+    let snapshot: RhythmWidgetReadResult
+
+    private var title: String {
+        if snapshot.source == .previous {
+            return RhythmWidgetLocale.english ? "Last valid data" : "上次有效资料"
+        }
+        if snapshot.source == .legacy {
+            return RhythmWidgetLocale.english ? "Snapshot saved" : "镜像保存"
+        }
+        return RhythmWidgetLocale.english ? "Data updated" : "资料更新"
+    }
+
+    var body: some View {
+        if let updatedAt = snapshot.contentUpdatedAt ?? snapshot.sourceModifiedAt {
+            let formatter: DateFormatter = {
+                let value = DateFormatter()
+                value.locale = Locale(identifier: RhythmWidgetLocale.english ? "en" : "zh-Hans")
+                value.dateFormat = RhythmWidgetLocale.english ? "MMM d HH:mm" : "M月d日 HH:mm"
+                return value
+            }()
+            HStack(spacing: 3) {
+                if snapshot.source == .previous { Image(systemName: "exclamationmark.circle") }
+                Text("\(title) \(formatter.string(from: updatedAt))")
+            }
+            .font(.system(size: 8))
+            .foregroundStyle(snapshot.source == .previous ? RhythmWidgetTheme.orange : Color.secondary)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
+private struct RhythmWidgetUnavailableView: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(RhythmWidgetLocale.english ? "Rhythm" : "搞节奏", systemImage: "leaf.fill")
+                .font(.headline.weight(.bold))
+            Spacer(minLength: 0)
+            Label(RhythmWidgetLocale.english ? "Data unavailable" : "资料暂不可读", systemImage: "exclamationmark.icloud")
+                .font(.caption.weight(.semibold))
+            Text(RhythmWidgetLocale.english ? "Open Rhythm to check sync. Your records have not been replaced." : "打开搞节奏检查同步，原记录未被覆盖。")
+                .font(.caption2).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .foregroundStyle(RhythmWidgetTheme.ink)
+        .background(Color.white)
+        .containerBackground(for: .widget) { Color.white }
+        .widgetURL(URL(string: "gaojiezou://today"))
     }
 }

@@ -14,8 +14,25 @@ enum RhythmBundle {
 
 /// The application owns termination, including when no content view is alive.
 @MainActor public enum RhythmApplicationLifecycle {
-    public static func prepareForTermination() {
+    @discardableResult
+    public static func prepareForTermination() -> Bool {
         RhythmRuntime.store.prepareForTermination()
+    }
+
+    public static func refreshWidgetPublication() {
+        RhythmRuntime.store.maintainWidgetPublication(force: true)
+    }
+
+    /// Installation-time publication from the existing archive. This does not
+    /// initialize the runtime, create a window, or modify the main library.
+    public static func publishSavedWidgetSnapshot(libraryDirectory: URL? = nil, widgetDirectory: URL? = nil) -> Bool {
+        let bundle = Bundle(for: RhythmBundleMarker.self)
+        return RhythmPersistence(
+            libraryDirectory: libraryDirectory,
+            widgetSnapshotURL: widgetDirectory?.appendingPathComponent("library.json"),
+            sourceVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
+            sourceBuild: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        ).publishCurrentLibrary()
     }
 
     public static func backgroundSnapshot() -> RhythmBackgroundSnapshot {

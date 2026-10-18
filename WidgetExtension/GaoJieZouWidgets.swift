@@ -5,7 +5,7 @@ struct RhythmMonthlyOverviewWidget: Widget {
     let kind = "com.gaojiezou.rhythm.monthly-overview"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: RhythmWidgetProvider()) { entry in
+        StaticConfiguration(kind: kind, provider: RhythmWidgetProvider(kind: kind)) { entry in
             RhythmWidgetMonthlyOverviewView(entry: entry)
         }
         .configurationDisplayName("月度总览")
@@ -19,7 +19,7 @@ struct RhythmMetricsWidget: Widget {
     let kind = "com.gaojiezou.rhythm.metrics"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: RhythmWidgetProvider()) { entry in
+        StaticConfiguration(kind: kind, provider: RhythmWidgetProvider(kind: kind)) { entry in
             RhythmWidgetMetricsView(entry: entry)
         }
         .configurationDisplayName("今日指标")
@@ -33,7 +33,7 @@ struct RhythmLongGoalsWidget: Widget {
     let kind = "com.gaojiezou.rhythm.long-goals"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: RhythmWidgetProvider()) { entry in
+        StaticConfiguration(kind: kind, provider: RhythmWidgetProvider(kind: kind)) { entry in
             RhythmWidgetGoalsView(entry: entry)
         }
         .configurationDisplayName("长期目标")

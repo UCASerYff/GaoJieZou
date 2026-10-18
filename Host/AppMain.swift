@@ -137,6 +137,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        RhythmApplicationLifecycle.refreshWidgetPublication()
+    }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         lifecycleLog.record("application.reopen")
         showMainWindow?()
@@ -154,7 +157,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 lifecycleLog.record("quit.reason.\(reason)")
             }
         }
-        RhythmApplicationLifecycle.prepareForTermination()
+        guard RhythmApplicationLifecycle.prepareForTermination() else {
+            lifecycleLog.record("quit.cancelled_save_failed")
+            showMainWindow?()
+            let alert = NSAlert()
+            alert.messageText = "资料尚未保存，已取消退出"
+            alert.informativeText = "当前记录和活动进度仍保留在内存中。请检查可用空间或资料目录权限后重试。"
+            alert.runModal()
+            return .terminateCancel
+        }
         lifecycleLog.record("quit.state_save_requested")
         return .terminateNow
     }

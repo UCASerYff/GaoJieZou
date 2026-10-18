@@ -19,12 +19,27 @@ final class RhythmPersistence {
 
     let encoder = JSONEncoder()
     let decoder = JSONDecoder()
+    struct WriteResult { let widgetPublished: Bool }
 
-    init() {
+    private let injectedLibraryDirectory: URL?
+    private let injectedWidgetSnapshotURL: URL?
+    private let injectedSourceVersion: String?
+    private let injectedSourceBuild: String?
+    private var cachedWidgetPublicationPending: Bool?
+    private var libraryLoadProtected = false
+    private let publicationLog = Logger(subsystem: "com.gaojiezou.rhythm", category: "widget-publication")
+
+    init(libraryDirectory: URL? = nil, widgetSnapshotURL: URL? = nil,
+         sourceVersion: String? = nil, sourceBuild: String? = nil) {
+        injectedLibraryDirectory = libraryDirectory
+        injectedWidgetSnapshotURL = widgetSnapshotURL
+        injectedSourceVersion = sourceVersion
+        injectedSourceBuild = sourceBuild
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     }
 
     var libraryDirectory: URL {
+        if let injectedLibraryDirectory { return injectedLibraryDirectory }
         if let override = ProcessInfo.processInfo.environment["GAOJIEZOU_DATA_DIR"], !override.isEmpty {
             return URL(fileURLWithPath: override, isDirectory: true)
         }
@@ -40,36 +55,73 @@ final class RhythmPersistence {
     /// application keeps its established library location and mirrors the
     /// same JSON into the signed application-group container on each save.
     var widgetSnapshotURL: URL? {
-        FileManager.default
+        if let injectedWidgetSnapshotURL { return injectedWidgetSnapshotURL }
+        return FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: "5G96498KGJ.com.gaojiezou.rhythm")?
             .appendingPathComponent("library.json")
+    }
+
+    var widgetSnapshotEnvelopeURL: URL? {
+        widgetSnapshotURL?.deletingLastPathComponent().appendingPathComponent("widget-snapshot.json")
+    }
+
+    var previousWidgetSnapshotEnvelopeURL: URL? {
+        widgetSnapshotURL?.deletingLastPathComponent().appendingPathComponent("widget-snapshot.previous.json")
+    }
+
+    private var publicationPendingMarker: URL { libraryURL.appendingPathExtension("widget-pending") }
+
+    private var shouldPublishWidgets: Bool {
+        if injectedWidgetSnapshotURL != nil { return true }
+        if injectedLibraryDirectory != nil || ProcessInfo.processInfo.environment["GAOJIEZOU_DATA_DIR"] != nil { return false }
+#if SMOKE_TEST || WIDGET_SYNC_TEST
+        return false
+#else
+        return true
+#endif
+    }
+
+    /// Cached between saves: the realtime clock must not hash the archive each second.
+    /// A disk marker also retains a failed publication over process exit.
+    var widgetPublicationPending: Bool {
+        guard shouldPublishWidgets else { return false }
+        if let pending = cachedWidgetPublicationPending { return pending }
+        let pending: Bool
+        if FileManager.default.fileExists(atPath: publicationPendingMarker.path) {
+            pending = true
+        } else if let data = try? Data(contentsOf: libraryURL),
+                  let envelope = validEnvelope(at: widgetSnapshotEnvelopeURL) {
+            pending = envelope.librarySHA256 != RhythmWidgetSnapshotEnvelope.sha256(data)
+        } else {
+            pending = true
+        }
+        cachedWidgetPublicationPending = pending
+        return pending
     }
 
     private var failureMarker:URL { libraryURL.appendingPathExtension("read-only") }
     func clearFailureMarker() throws {
         if FileManager.default.fileExists(atPath:failureMarker.path) { try FileManager.default.removeItem(at:failureMarker) }
+        libraryLoadProtected = false
     }
     func load() -> LoadResult {
-        if FileManager.default.fileExists(atPath:failureMarker.path) { return .corrupted(quarantinedPath:libraryDirectory.path) }
-        let fileManager = FileManager.default
-        // 上次写入中途崩溃可能残留临时文件，启动时清理，避免堆积。
-        let temporaryURL = libraryURL.appendingPathExtension("tmp")
-        if fileManager.fileExists(atPath: temporaryURL.path) {
-            do {
-                try fileManager.removeItem(at: temporaryURL)
-                RhythmLog.data.warning("已清理上次写入中断残留的临时文件 library.json.tmp")
-            } catch {
-                RhythmLog.data.error("清理残留的临时文件失败：\(error.localizedDescription, privacy: .public)")
-            }
+        if FileManager.default.fileExists(atPath:failureMarker.path) {
+            libraryLoadProtected = true
+            return .corrupted(quarantinedPath:libraryDirectory.path)
         }
+        let fileManager = FileManager.default
         do {
             let data = try Data(contentsOf: libraryURL)
             let decoded=try decoder.decode(RhythmLibrary.self,from:data)
             guard decoded.version <= RhythmEconomy.schemaVersion else { throw RhythmStoreError.backupFromNewerVersion(found:decoded.version) }
+            // Only discard a leftover temporary after validating the real archive.
+            // A missing real archive plus a temporary is recoverable data, not first launch.
+            let temporaryURL = libraryURL.appendingPathExtension("tmp")
+            if fileManager.fileExists(atPath: temporaryURL.path) { try? fileManager.removeItem(at: temporaryURL) }
             return .loaded(migratedLibrary(decoded))
         } catch {
-            // 文件尚不存在属于首次启动，不是损坏，静默使用初始模板。
-            guard fileManager.fileExists(atPath: libraryURL.path) else { return .missing }
+            if (error as? CocoaError)?.code == .fileReadNoSuchFile, isEmptyFirstLaunchDirectory() { return .missing }
+            libraryLoadProtected = true
             RhythmLog.data.error("本地数据文件读取或解码失败，保留原文件并进入只读保护：\(error.localizedDescription, privacy: .public)")
             // 保留原文件，并让只读状态跨重启延续，直到验证后的备份恢复成功。
             try? Data("Read-only protection: restore a verified backup.".utf8).write(to:failureMarker,options:.atomic)
@@ -77,8 +129,21 @@ final class RhythmPersistence {
         }
     }
 
+    private func isEmptyFirstLaunchDirectory() -> Bool {
+        let fileManager = FileManager.default
+        for url in [widgetSnapshotURL, widgetSnapshotEnvelopeURL, previousWidgetSnapshotEnvelopeURL].compactMap({ $0 }) {
+            if shouldPublishWidgets, fileManager.fileExists(atPath: url.path) { return false }
+        }
+        do {
+            return try fileManager.contentsOfDirectory(atPath: libraryDirectory.path).isEmpty
+        } catch {
+            return (error as? CocoaError)?.code == .fileReadNoSuchFile
+        }
+    }
+
     /// 原子写入主库；非测试环境同时把同一份 JSON 镜像到 App Group 供小组件读取。
-    func write(_ library: RhythmLibrary) throws {
+    @discardableResult
+    func write(_ library: RhythmLibrary) throws -> WriteResult {
         try FileManager.default.createDirectory(at: libraryDirectory, withIntermediateDirectories: true)
         let data = try encoder.encode(library)
         let temporary = libraryURL.appendingPathExtension("tmp")
@@ -88,20 +153,70 @@ final class RhythmPersistence {
         } else {
             try FileManager.default.moveItem(at: temporary, to: libraryURL)
         }
-#if !SMOKE_TEST
-        if ProcessInfo.processInfo.environment["GAOJIEZOU_DATA_DIR"] == nil, let widgetURL = widgetSnapshotURL {
-            do {
-                try FileManager.default.createDirectory(
-                    at: widgetURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true
-                )
-                try data.write(to: widgetURL, options: .atomic)
-            } catch {
-                // 镜像失败不影响主库，小组件下次成功保存时会拿到最新数据。
-                RhythmLog.data.error("写入 App Group 小组件镜像失败：\(error.localizedDescription, privacy: .public)")
+        guard shouldPublishWidgets else { return WriteResult(widgetPublished: true) }
+        markPublicationPending(data)
+        return WriteResult(widgetPublished: publishCurrentLibrary())
+    }
+
+    /// Retry publishing the committed archive without rewriting it or changing its
+    /// modification time. Invalid/newer/unreadable data never replaces a good snapshot.
+    @discardableResult
+    func publishCurrentLibrary() -> Bool {
+        guard shouldPublishWidgets else { return true }
+        guard !libraryLoadProtected,
+              !FileManager.default.fileExists(atPath: failureMarker.path) else { return false }
+        do {
+            let data = try Data(contentsOf: libraryURL)
+            _ = try RhythmWidgetSnapshotEnvelope.validateLibrary(data)
+            let decoded = try decoder.decode(RhythmLibrary.self, from: data)
+            guard decoded.version <= RhythmEconomy.schemaVersion else {
+                throw RhythmStoreError.backupFromNewerVersion(found: decoded.version)
             }
+            markPublicationPending(data)
+            guard let widgetURL = widgetSnapshotURL,
+                  let envelopeURL = widgetSnapshotEnvelopeURL,
+                  let previousURL = previousWidgetSnapshotEnvelopeURL else { throw CocoaError(.fileNoSuchFile) }
+            try FileManager.default.createDirectory(at: widgetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let oldEnvelope = validEnvelope(at: envelopeURL) ?? validEnvelope(at: previousURL)
+            let sourceModifiedAt = try FileManager.default.attributesOfItem(atPath: libraryURL.path)[.modificationDate] as? Date
+            guard let sourceModifiedAt else { throw CocoaError(.fileReadUnknown) }
+            let businessHash = try RhythmWidgetSnapshotEnvelope.businessDigest(data)
+            let contentUpdatedAt = oldEnvelope?.businessSHA256 == businessHash
+                ? oldEnvelope!.contentUpdatedAt : sourceModifiedAt
+            let sourceVersion = injectedSourceVersion ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
+            let sourceBuild = injectedSourceBuild ?? Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "unknown"
+            let envelope = try RhythmWidgetSnapshotEnvelope(libraryData: data, sourceModifiedAt: sourceModifiedAt,
+                contentUpdatedAt: contentUpdatedAt, sourceVersion: sourceVersion, sourceBuild: sourceBuild)
+            // Compatibility readers get the same committed bytes. If this fails,
+            // the authoritative envelope remains untouched and publication stays pending.
+            try data.write(to: widgetURL, options: .atomic)
+            if let currentData = try? Data(contentsOf: envelopeURL),
+               (try? RhythmWidgetSnapshotEnvelope.decodeValidated(currentData)) != nil {
+                try currentData.write(to: previousURL, options: .atomic)
+            }
+            try encoder.encode(envelope).write(to: envelopeURL, options: .atomic)
+            // Once committed, the envelope is the authority even if removing an old
+            // marker fails; an unnecessary later retry is harmless.
+            try? FileManager.default.removeItem(at: publicationPendingMarker)
+            cachedWidgetPublicationPending = false
+            publicationLog.info("published hash=\(String(envelope.librarySHA256.prefix(12)), privacy: .public) business=\(String(envelope.businessSHA256.prefix(12)), privacy: .public) source=\(envelope.sourceModifiedAt.timeIntervalSince1970, privacy: .public) content=\(envelope.contentUpdatedAt.timeIntervalSince1970, privacy: .public) generated=\(envelope.generatedAt.timeIntervalSince1970, privacy: .public) version=\(envelope.sourceVersion, privacy: .public) build=\(envelope.sourceBuild, privacy: .public)")
+            return true
+        } catch {
+            cachedWidgetPublicationPending = true
+            // Do not log record titles, full paths, or raw archive contents.
+            publicationLog.error("publication_failed status=pending code=\((error as NSError).code, privacy: .public)")
+            return false
         }
-#endif
+    }
+
+    private func markPublicationPending(_ data: Data) {
+        cachedWidgetPublicationPending = true
+        try? Data(RhythmWidgetSnapshotEnvelope.sha256(data).utf8).write(to: publicationPendingMarker, options: .atomic)
+    }
+
+    private func validEnvelope(at url: URL?) -> RhythmWidgetSnapshotEnvelope? {
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
+        return try? RhythmWidgetSnapshotEnvelope.decodeValidated(data)
     }
 
     /// 把损坏的数据文件复制为带时间戳的副本并移走原文件，返回副本的展示路径。

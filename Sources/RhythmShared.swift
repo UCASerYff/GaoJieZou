@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import CoreFoundation
 
 /// 主程序与 WidgetKit 小组件共享的纯函数口径层（单一事实源）。
 ///
@@ -207,5 +209,139 @@ enum RhythmShared {
             green: Double((value >> 8) & 0xFF) / 255,
             blue: Double(value & 0xFF) / 255
         )
+    }
+}
+
+/// A complete, self-validating publication. The payload and its revision live in
+/// one atomically replaced file, so a reader cannot pair new metadata with old JSON.
+struct RhythmWidgetSnapshotEnvelope: Codable {
+    static let currentFormatVersion = 1
+    static let maximumSourceSchema = 11
+
+    let formatVersion: Int
+    let sourceSchema: Int
+    let libraryData: Data
+    let librarySHA256: String
+    let businessSHA256: String
+    let sourceModifiedAt: Date
+    let contentUpdatedAt: Date
+    let generatedAt: Date
+    let sourceVersion: String
+    let sourceBuild: String
+
+    enum ValidationError: Error {
+        case unsupportedFormat, unsupportedSchema, invalidLibrary, invalidHash, invalidTimestamp
+    }
+
+    init(libraryData: Data, sourceModifiedAt: Date, contentUpdatedAt: Date,
+         generatedAt: Date = Date(), sourceVersion: String, sourceBuild: String) throws {
+        self.formatVersion = Self.currentFormatVersion
+        self.sourceSchema = try Self.validateLibrary(libraryData)
+        self.libraryData = libraryData
+        self.librarySHA256 = Self.sha256(libraryData)
+        self.businessSHA256 = try Self.businessDigest(libraryData)
+        self.sourceModifiedAt = sourceModifiedAt
+        self.contentUpdatedAt = contentUpdatedAt
+        self.generatedAt = generatedAt
+        self.sourceVersion = sourceVersion
+        self.sourceBuild = sourceBuild
+        try validate()
+    }
+
+    static func decodeValidated(_ data: Data) throws -> Self {
+        let envelope = try JSONDecoder().decode(Self.self, from: data)
+        try envelope.validate()
+        return envelope
+    }
+
+    func validate() throws {
+        guard formatVersion == Self.currentFormatVersion else { throw ValidationError.unsupportedFormat }
+        let schema = try Self.validateLibrary(libraryData)
+        guard sourceSchema == schema else { throw ValidationError.unsupportedSchema }
+        guard sourceModifiedAt.timeIntervalSinceReferenceDate.isFinite,
+              contentUpdatedAt.timeIntervalSinceReferenceDate.isFinite,
+              generatedAt.timeIntervalSinceReferenceDate.isFinite else { throw ValidationError.invalidTimestamp }
+        guard librarySHA256 == Self.sha256(libraryData),
+              businessSHA256 == (try Self.businessDigest(libraryData)) else { throw ValidationError.invalidHash }
+    }
+
+    /// Missing core arrays are an invalid archive, never an empty projection.
+    /// `chores` remains optional in the established schema-11 archive protocol.
+    @discardableResult
+    static func validateLibrary(_ data: Data) throws -> Int {
+        let object = try libraryObject(data)
+        guard let version = object["version"] as? NSNumber,
+              CFGetTypeID(version) != CFBooleanGetTypeID(),
+              version.doubleValue.rounded() == version.doubleValue,
+              version.intValue > 0, version.intValue <= maximumSourceSchema else {
+            throw ValidationError.unsupportedSchema
+        }
+        let required = ["habits", "habitCompletionKeys", "focusRecords", "sleepRecords", "longGoals", "shortActions"]
+        for key in required {
+            guard object[key] is [Any] else { throw ValidationError.invalidLibrary }
+        }
+        guard let completionKeys = object["habitCompletionKeys"] as? [String],
+              completionKeys.count == (object["habitCompletionKeys"] as? [Any])?.count else {
+            throw ValidationError.invalidLibrary
+        }
+        for key in ["habits", "focusRecords", "sleepRecords", "longGoals", "shortActions"] {
+            guard let records = object[key] as? [[String: Any]],
+                  records.allSatisfy({ $0["id"] is String }) else { throw ValidationError.invalidLibrary }
+        }
+        if let chores = object["chores"], !(chores is [[String: Any]]) { throw ValidationError.invalidLibrary }
+        for key in ["activeFocus", "activeSleep"] {
+            if let value = object[key], !(value is NSNull), !(value is [String: Any]) {
+                throw ValidationError.invalidLibrary
+            }
+        }
+        return version.intValue
+    }
+
+    /// Stable across dictionary/set ordering and game-only settlement saves.
+    /// Real timer anchors and completed business records remain part of the digest.
+    static func businessDigest(_ data: Data) throws -> String {
+        _ = try validateLibrary(data)
+        let object = try libraryObject(data)
+        var projection: [String: Any] = [:]
+        for key in ["version", "habits", "habitCompletionKeys", "activeFocus", "activeSleep",
+                    "focusRecords", "sleepRecords", "longGoals", "shortActions", "chores"] {
+            if let value = object[key] { projection[key] = value }
+        }
+        projection["habitCompletionKeys"] = (object["habitCompletionKeys"] as? [String] ?? []).sorted()
+        if let habits = object["habits"] as? [[String: Any]] {
+            projection["habits"] = habits.map { original -> [String: Any] in
+                var habit = original
+                if let weekdays = habit["weekdays"] as? [Int] { habit["weekdays"] = weekdays.sorted() }
+                return habit
+            }
+        }
+        if let focus = object["activeFocus"] as? [String: Any] {
+            projection["activeFocus"] = selected(focus, keys: ["id", "title", "linkedActionID", "startedAt",
+                                                              "accumulatedSeconds", "segmentStartedAt", "pausedForSystem"])
+        }
+        if let sleep = object["activeSleep"] as? [String: Any] {
+            projection["activeSleep"] = selected(sleep, keys: ["id", "startedAt", "targetHours"])
+        }
+        if let records = object["sleepRecords"] as? [[String: Any]] {
+            projection["sleepRecords"] = records.map {
+                selected($0, keys: ["id", "healthSource", "startedAt", "endedAt", "durationSeconds", "score", "manualEntry"])
+            }
+        }
+        return sha256(try JSONSerialization.data(withJSONObject: projection, options: [.sortedKeys]))
+    }
+
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func libraryObject(_ data: Data) throws -> [String: Any] {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw ValidationError.invalidLibrary
+        }
+        return object
+    }
+
+    private static func selected(_ object: [String: Any], keys: [String]) -> [String: Any] {
+        object.filter { keys.contains($0.key) }
     }
 }

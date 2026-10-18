@@ -53,7 +53,8 @@ final class RhythmStore: ObservableObject {
 
     let aquariumCapacity = RhythmEconomy.aquariumCapacity
 
-    private let persistence = RhythmPersistence()
+    private let persistence: RhythmPersistence
+    private let widgetReload: () -> Void
     @Published private(set) var loadFailed=false
     private let realtimeEngine = RhythmRealtimeEngine()
     private let estateEngine = RhythmEstateEngine()
@@ -61,6 +62,11 @@ final class RhythmStore: ObservableObject {
     private var synchronizingSleep = false
 
     private var lastWidgetReloadAt = Date.distantPast
+    private var pendingMainSave = false
+    private var needsWidgetReload = true
+    private var lastPersistenceAttemptAt = Date.distantPast
+    private var lastMaintenanceAt = Date.distantPast
+    private var calendarContext: String?
     /// 小组件关心的数据（打卡/琐事/专注/睡眠/长期目标/短期行动）自上次
     /// 时间线重载以来是否发生过变更；纯游戏数值（农场/牧场/渔场）不置位。
     private var widgetDirty = false
@@ -70,20 +76,30 @@ final class RhythmStore: ObservableObject {
     /// 单条专注记录时长的告警阈值（只记日志，不截断记录本身）。
     private static let focusRecordWarningSeconds: TimeInterval = 24 * 3600
 
-    init() {
+    init(persistence: RhythmPersistence = RhythmPersistence(), startServices: Bool = true,
+         widgetReload: (() -> Void)? = nil) {
+        self.persistence = persistence
+        self.widgetReload = widgetReload ?? {
+#if canImport(WidgetKit) && !SMOKE_TEST && !WIDGET_SYNC_TEST
+            WidgetCenter.shared.reloadAllTimelines()
+#endif
+        }
         load()
+        maintainWidgetPublication(force: true)
         realtimeEngine.tickHandler = { [weak self] date in
             self?.synchronizeRealtimeProgress(at: date)
+            self?.maintainWidgetPublication(at: date)
         }
         realtimeEngine.systemPauseHandler = { [weak self] in
             self?.pauseFocus(forSystem: true)
         }
         realtimeEngine.systemResumeHandler = { [weak self] in
-            guard let self, self.activeFocus?.pausedForSystem == true else { return }
-            self.resumeFocus()
+            self?.handleSystemWake()
         }
-        realtimeEngine.start()
-        sleepSync.start { [weak self] in self?.synchronizeSleepRecords() }
+        if startServices {
+            realtimeEngine.start()
+            sleepSync.start { [weak self] in self?.synchronizeSleepRecords() }
+        }
     }
 
     // MARK: - 持久化（委托 RhythmPersistence）
@@ -95,7 +111,7 @@ final class RhythmStore: ObservableObject {
             if activeFocus?.segmentStartedAt != nil {
                 pauseFocus()
             } else {
-                synchronizeRealtimeProgress(at: Date(), persist: true)
+                synchronizeRealtimeProgress(at: Date())
             }
         case .missing:
             apply(.starter())
@@ -113,21 +129,25 @@ final class RhythmStore: ObservableObject {
     @discardableResult
     func save() -> Bool {
         guard !loadFailed else { return false }
+        lastPersistenceAttemptAt = Date()
         do {
-            try persistence.write(snapshot())
+            let result = try persistence.write(snapshot())
+            pendingMainSave = false
             // widgetDirty 会在下方小组件重载后被清掉，先捕获供打卡提醒判断。
             let widgetDataChanged = widgetDirty
-#if canImport(WidgetKit) && !SMOKE_TEST
             let now = Date()
             let hasActiveSession = activeFocus != nil || activeSleep != nil
             let activeSessionNeedsRefresh = hasActiveSession
                 && now.timeIntervalSince(lastWidgetReloadAt) >= Self.widgetActiveSessionReloadInterval
-            if widgetDirty || activeSessionNeedsRefresh {
-                WidgetCenter.shared.reloadAllTimelines()
-                lastWidgetReloadAt = now
+            if result.widgetPublished {
+                if widgetDirty || needsWidgetReload || activeSessionNeedsRefresh {
+                    requestWidgetReload(at: now)
+                }
                 widgetDirty = false
+                needsWidgetReload = false
+            } else {
+                needsWidgetReload = true
             }
-#endif
             // 打卡相关数据（widgetDirty 覆盖打卡/琐事/专注/睡眠/目标/行动）变化后重排每日打卡提醒。
             // store 是 @MainActor，调用同步收口在主线程；非 .app 环境下 RhythmNotifications 内部空转。
             if widgetDataChanged {
@@ -135,10 +155,54 @@ final class RhythmStore: ObservableObject {
             }
             return true
         } catch {
+            pendingMainSave = true
             RhythmLog.data.error("本地数据保存失败：\(error.localizedDescription, privacy: .public)")
             notice = RhythmLocalization.format("本地数据保存失败：%@", error.localizedDescription)
             return false
         }
+    }
+
+    /// Retry the last commit/publication even after a session finishes and the
+    /// store becomes idle. Timer ticks only check state; I/O is bounded to 30s.
+    func maintainWidgetPublication(at date: Date = Date(), force: Bool = false) {
+        guard !loadFailed else { return }
+        let calendar = Calendar.current
+        let context = "\(calendar.startOfDay(for: date).timeIntervalSinceReferenceDate):\(calendar.timeZone.identifier):\(calendar.timeZone.secondsFromGMT(for: date))"
+        let boundaryChanged = calendarContext != context
+        if boundaryChanged {
+            calendarContext = context
+            objectWillChange.send()
+            needsWidgetReload = true
+            RhythmNotifications.rescheduleDailyHabitReminder(pendingCount: pendingHabitCountToday)
+        }
+        guard force || boundaryChanged || date.timeIntervalSince(lastMaintenanceAt) >= 30 else { return }
+        lastMaintenanceAt = date
+        if pendingMainSave {
+            guard force || date.timeIntervalSince(lastPersistenceAttemptAt) >= 30 else { return }
+            _ = save()
+            return
+        }
+        guard force || boundaryChanged || persistence.widgetPublicationPending || needsWidgetReload else { return }
+        if persistence.publishCurrentLibrary() {
+            if force || boundaryChanged || widgetDirty || needsWidgetReload { requestWidgetReload(at: date) }
+            widgetDirty = false
+            needsWidgetReload = false
+        } else {
+            needsWidgetReload = true
+        }
+    }
+
+    func handleSystemWake() {
+        synchronizeSleepRecords()
+        if activeFocus?.pausedForSystem == true { resumeFocus() }
+        synchronizeRealtimeProgress(at: Date(), persist: activeFocus != nil || activeSleep != nil)
+        maintainWidgetPublication(force: true)
+    }
+
+    private func requestWidgetReload(at date: Date) {
+        widgetReload()
+        lastWidgetReloadAt = date
+        RhythmLog.data.info("widget.reload_requested (system scheduling, not a display acknowledgement)")
     }
 
     func backupData() throws -> Data {
@@ -421,12 +485,18 @@ final class RhythmStore: ObservableObject {
 
     // MARK: - Focus
 
-    func prepareForTermination() {
+    @discardableResult
+    func prepareForTermination() -> Bool {
+        guard !loadFailed else { return true }
         if activeFocus?.segmentStartedAt != nil {
             pauseFocus()
         } else {
-            synchronizeRealtimeProgress(at: Date(), persist: true)
+            synchronizeRealtimeProgress(at: Date())
         }
+        // A final main-library failure must not silently discard the session.
+        guard save() else { return false }
+        maintainWidgetPublication(force: true)
+        return true
     }
 
     func focusElapsed(at date: Date = Date()) -> TimeInterval {
@@ -633,8 +703,10 @@ final class RhythmStore: ObservableObject {
     }
 
     private func notifySleepSaved() {
+#if !WIDGET_SYNC_TEST
         NotificationCenter.default.post(name: Notification.Name("GaoSeries.rhythm.sleepSaved"), object: nil)
         DistributedNotificationCenter.default().postNotificationName(Notification.Name("GaoSeries.rhythm.sleepSaved"), object: nil, userInfo: nil, deliverImmediately: true)
+#endif
     }
 
     func sleepElapsed(at date: Date = Date()) -> TimeInterval {
