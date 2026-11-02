@@ -1,10 +1,23 @@
 import Charts
 import SwiftUI
 
+private struct LongGoalEditorRoute: Identifiable {
+    let id: String
+    let goal: LongGoal?
+
+    static func create() -> LongGoalEditorRoute {
+        LongGoalEditorRoute(id: "new-\(UUID().uuidString)", goal: nil)
+    }
+
+    static func edit(_ goal: LongGoal) -> LongGoalEditorRoute {
+        // Reopening the same goal must also initialize a fresh editing draft.
+        LongGoalEditorRoute(id: "edit-\(goal.id)-\(UUID().uuidString)", goal: goal)
+    }
+}
+
 struct LongGoalDashboard: View {
     @EnvironmentObject private var store: RhythmStore
-    @State private var showingEditor = false
-    @State private var editingGoal: LongGoal?
+    @State private var editorRoute: LongGoalEditorRoute?
     @State private var deleteCandidate: LongGoal?
 
     private var activeCount: Int { store.longGoals.filter { $0.status == .active }.count }
@@ -27,8 +40,7 @@ struct LongGoalDashboard: View {
                     Text(RhythmLocalization.text("长期目标")).font(.headline)
                     Spacer()
                     Button {
-                        editingGoal = nil
-                        showingEditor = true
+                        editorRoute = .create()
                     } label: {
                         Label(RhythmLocalization.text("新建长期目标"), systemImage: "plus")
                     }
@@ -37,15 +49,13 @@ struct LongGoalDashboard: View {
 
                 if store.longGoals.isEmpty {
                     EmptyStateView(symbol: "flag.checkered", title: "还没有长期目标", message: "描述想达到的结果、衡量方式和期望日期，再把它拆成短期行动。", actionTitle: "新建长期目标") {
-                        editingGoal = nil
-                        showingEditor = true
+                        editorRoute = .create()
                     }
                 } else {
                     LazyVStack(spacing: 12) {
                         ForEach(store.longGoals.sorted(by: goalSort)) { goal in
                             LongGoalCard(goal: goal) {
-                                editingGoal = goal
-                                showingEditor = true
+                                editorRoute = .edit(goal)
                             } delete: {
                                 deleteCandidate = goal
                             }
@@ -57,8 +67,9 @@ struct LongGoalDashboard: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
-        .sheet(isPresented: $showingEditor) {
-            LongGoalEditor(goal: editingGoal)
+        .sheet(item: $editorRoute) { route in
+            LongGoalEditor(goal: route.goal)
+                .id(route.id)
                 .environmentObject(store)
         }
         .alert(RhythmLocalization.text("删除这个长期目标？"), isPresented: Binding(
