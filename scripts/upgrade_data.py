@@ -436,7 +436,10 @@ def resolve_roots(args, saved: dict | None = None) -> dict[str, Path]:
         # Resolve macOS /var -> /private/var for test fixtures. Symlinks inside
         # each data tree remain forbidden by inventory().
         result[name] = path.resolve()
-    if saved is None or "shared_sleep" in saved or args.shared_sleep_root:
+    # After explicit cutover SharedSleep is nested in the complete Rhythm group.
+    # Historical receipts keep their original external source path for verification.
+    integrated = (result["app_group"] / "Integration/authority.json").is_file()
+    if (saved is None and not integrated) or "shared_sleep" in (saved or {}) or args.shared_sleep_root:
         default_shared = home / "Library/Group Containers/5G96498KGJ.com.gaoseries.GaoJianKang/SharedSleep"
         # Fixture invocations must never inspect unrelated real user data.
         if saved is None and (args.rhythm_root or args.group_root) and not args.shared_sleep_root:

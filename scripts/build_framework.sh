@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT=${0:A:h:h}
+python3 "$ROOT/scripts/require_build_lease.py"
 XCODE=/Applications/Xcode.app
 if [[ ! -d "$XCODE/Contents/Developer" ]]; then
     echo "error: 未找到 Xcode（$XCODE）。构建需要完整 Xcode 工具链（SwiftUI 宏插件只随 Xcode 分发），" >&2
@@ -8,6 +9,7 @@ if [[ ! -d "$XCODE/Contents/Developer" ]]; then
     exit 1
 fi
 export DEVELOPER_DIR="$XCODE/Contents/Developer"
+"$ROOT/scripts/build_integrated_frameworks.sh"
 NAME=Rhythm
 SOURCE="$ROOT"
 [[ -d "$SOURCE/Sources" && -f "$SOURCE/Module.swift" ]] || { echo "Unknown module: $NAME" >&2; exit 1; }
@@ -19,7 +21,7 @@ mkdir -p "$VERSION/Modules/$NAME.swiftmodule" "$VERSION/Resources" "$BUILD/cache
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 MACROS="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib"
 [[ -f "$MACROS" ]] || { echo "error: SwiftUI 宏插件缺失：$MACROS（Xcode 安装不完整？）" >&2; exit 1; }
-SOURCES=("$SOURCE"/Sources/*.swift "$SOURCE"/Shared/*.swift(N) "$ROOT"/GameWorld/*.swift "$SOURCE/Module.swift")
+SOURCES=("$SOURCE"/Sources/*.swift "$SOURCE"/Shared/*.swift(N) "$ROOT"/GameWorld/*.swift "$SOURCE/Module.swift" "$ROOT/Integration/Shared/IntegrationAuthority.swift")
 swiftc -swift-version 5 -parse-as-library -O -emit-library -emit-module \
     -module-name "$NAME" -sdk "$SDK" -target arm64-apple-macosx14.0 \
     -module-cache-path "$BUILD/cache" -load-plugin-library "$MACROS" \
@@ -28,6 +30,7 @@ swiftc -swift-version 5 -parse-as-library -O -emit-library -emit-module \
     -framework UniformTypeIdentifiers -framework Security -framework PDFKit \
     -framework QuickLookUI -framework UserNotifications -framework Combine \
     -framework CoreText -framework ImageIO -lsqlite3 \
+    -F "$BUILD/Frameworks" -framework RhythmHealth -framework RhythmFootprints \
     -Xlinker -install_name -Xlinker "@rpath/$NAME.framework/Versions/A/$NAME" \
     $SOURCES \
     -emit-module-path "$VERSION/Modules/$NAME.swiftmodule/arm64-apple-macos.swiftmodule" \

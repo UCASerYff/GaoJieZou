@@ -3,6 +3,8 @@ import AppKit
 import UserNotifications
 import Carbon
 import Rhythm
+import RhythmHealth
+import RhythmFootprints
 
 @main struct StandaloneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
@@ -15,6 +17,16 @@ import Rhythm
             alert.informativeText = error.localizedDescription + "\n当前数据和恢复前副本已保留。"
             alert.runModal()
             exit(1)
+        }
+        do {
+                try HealthModuleRuntime.applyPendingRestoreBeforeOpening()
+                try FootprintsModuleRuntime.applyPendingRestoreBeforeOpening()
+        } catch {
+                let alert = NSAlert()
+                alert.messageText = "整合模块恢复未完成"
+                alert.informativeText = error.localizedDescription + "\n当前资料、来源归档及待恢复任务均已保留。"
+                alert.runModal()
+                exit(1)
         }
         AppAppearance.current.apply()
     }
@@ -44,6 +56,11 @@ import Rhythm
                 Button("导出模块备份…") { post("GaoSeries.rhythm.export") }
                 Button("恢复模块备份…") { post("GaoSeries.rhythm.import") }
                 Divider()
+                Button("健康资料导出…") { delegate.openIntegratedAction("health", "export") }
+                Button("健康资料恢复…") { delegate.openIntegratedAction("health", "import") }
+                Button("足迹资料导出…") { delegate.openIntegratedAction("footprints", "export") }
+                Button("足迹资料恢复…") { delegate.openIntegratedAction("footprints", "import") }
+                Divider()
                 Button("完整资料备份与恢复…") { delegate.showSettings?() }
             }
         }
@@ -57,6 +74,8 @@ import Rhythm
         Settings {
             TabView {
                 RhythmSettingsView().tabItem { Label("模块设置", systemImage: "slider.horizontal.3") }
+                IntegratedHealthSettings().tabItem { Label("健康", systemImage: "heart") }
+                IntegratedFootprintsSettings().tabItem { Label("足迹", systemImage: "map") }
                 GeneralSettings().tabItem { Label("外观", systemImage: "paintpalette") }
                 DataSettings().tabItem { Label("数据", systemImage: "externaldrive") }
             }.frame(width: 820, height: 740)
@@ -86,6 +105,7 @@ private struct MainWindowContent: View {
                 delegate.showMainWindow = showMainWindow
                 delegate.showSettings = { openSettings() }
                 delegate.lifecycleLog.record("window.opened")
+                consumeIntegratedAction()
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.dataError"))) { dataError = $0.userInfo?["message"] as? String }
             .alert("数据操作未完成", isPresented: Binding(get: { dataError != nil }, set: { if !$0 { dataError = nil } })) {
@@ -94,11 +114,52 @@ private struct MainWindowContent: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.app.openSettings"))) { _ in openSettings() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("appOpenSettings"))) { _ in openSettings() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Standalone.showWindow"))) { _ in showMainWindow() }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Standalone.consumeIntegratedURL"))) { _ in consumeIntegratedAction() }
             .onOpenURL { url in
-                route = url
+                route = integratedURL(url)
                 revision &+= 1
                 showMainWindow()
             }
+    }
+
+    private func consumeIntegratedAction() {
+        guard let url = delegate.pendingIntegratedURL else { return }
+        delegate.pendingIntegratedURL = nil
+        route = url; revision &+= 1
+    }
+}
+
+/// Old links are aliases handled in this process; never launch a retired provider.
+private func integratedURL(_ url: URL) -> URL {
+    guard url.scheme == "gaojiankang" || url.scheme == "gaozuji" else { return url }
+    var parts = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    parts?.scheme = "gaojiezou"
+    parts?.host = url.scheme == "gaojiankang" ? "health" : "footprints"
+    parts?.path = "/" + (url.host ?? "") + url.path
+    return parts?.url ?? url
+}
+
+private struct IntegratedHealthSettings: View {
+    var body: some View {
+        if RhythmIntegrationPaths.isActive {
+            TabView {
+                HealthSettingsView().tabItem { Text("健康设置") }
+                HealthDataSettingsView().tabItem { Text("健康数据") }
+                HealthAppearanceSettingsView().tabItem { Text("原外观偏好") }
+            }
+        } else { Text("健康资料尚未完成迁移激活，原资料保持原样。") }
+    }
+}
+
+private struct IntegratedFootprintsSettings: View {
+    var body: some View {
+        if RhythmIntegrationPaths.isActive {
+            TabView {
+                FootprintsSettingsView().tabItem { Text("足迹设置") }
+                FootprintsDataSettingsView().tabItem { Text("足迹数据") }
+                FootprintsAppearanceSettingsView().tabItem { Text("原外观偏好") }
+            }
+        } else { Text("足迹资料尚未完成迁移激活，原资料保持原样。") }
     }
 }
 
@@ -108,6 +169,13 @@ func post(_ name: String) { NotificationCenter.default.post(name: Notification.N
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     var showMainWindow: (() -> Void)?
     var showSettings: (() -> Void)?
+    var pendingIntegratedURL: URL?
+    func openIntegratedAction(_ module: String, _ action: String) {
+        guard let url = URL(string: "gaojiezou://\(module)/\(action)") else { return }
+        pendingIntegratedURL = url
+        showMainWindow?()
+        NotificationCenter.default.post(name:Notification.Name("Standalone.consumeIntegratedURL"),object:nil)
+    }
     let lifecycleLog: AppLifecycleLog
     let resident: ResidentAppController
     private var windowObserver: NSObjectProtocol?

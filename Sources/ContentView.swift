@@ -107,6 +107,8 @@ struct ContentView: View {
     private func handleRoute(_ url: URL) {
         switch url.host {
         case "longGoals": selection = .longGoals
+        case "health": selection = .health
+        case "footprints": selection = .footprints
         default: selection = .today
         }
     }
@@ -120,6 +122,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     sidebarSection(RhythmLocalization.text("节奏管理"), sections: [.today, .habits, .chores, .focus, .sleep, .statistics])
                     sidebarSection(RhythmLocalization.text("目标规划"), sections: [.longGoals, .shortActions])
+                    sidebarSection(RhythmLocalization.text("健康与旅行"), sections: [.health, .footprints])
                     sidebarSection(RhythmLocalization.text("奖励系统"), sections: [.farm, .pasture, .fishing, .collection])
                 }
                 .padding(.horizontal, 14)
@@ -264,6 +267,10 @@ struct ContentView: View {
             FishingHubView()
         case .collection:
             CollectionView()
+        case .health:
+            IntegratedHealthView(route: route, routeRevision: routeRevision)
+        case .footprints:
+            IntegratedFootprintsView(route: route, routeRevision: routeRevision)
         }
     }
 

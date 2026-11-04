@@ -1,0 +1,40 @@
+搞足迹 V0.1 · 地理数据来源（2026-09-21）
+
+世界地图与海外城市：Natural Earth，公共领域。
+https://www.naturalearthdata.com/about/terms-of-use/
+https://github.com/nvkelso/natural-earth-vector
+采用 1:50m 国家/地区边界与 1:10m Populated Places；城市坐标和多语言名称离线打包。
+中国世界统计归属合并 CHN / TWN / HKG / MAC；世界图几何保留来源细节，不构成任何权威边界声明。
+
+中国省级与城市级地图：Supeset/China-GeoData 仓库（MIT License，Copyright © 2025 圈集）。
+https://github.com/Supeset/China-GeoData
+原仓库声明上游为国内地理信息平台，未逐项给出原始许可链；本次按仓库声明用于本机自用版本，公开再分发前仍需完成上游来源和地图内容核对，不声称已有审图批准。
+处理：保留源几何的环与顶点（坐标四位小数），四个直辖市及港澳台替换为省级单元，剔除其下区县，保留省直辖单位。中国清单为产品口径，可能存在源数据年代差异；并非 2026 法定行政区划清单。
+中国位置使用来源坐标作收藏示意，不供导航或米级定位。
+数据版本与各源文件 SHA-256 见 DatasetManifest.json；重建脚本见 scripts/prepare_data.py。
+
+未使用 GeoNames、geoBoundaries 或在线瓦片；应用运行不联网。
+
+第三方许可全文：
+
+MIT License
+
+Copyright (c) 2025 圈集
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

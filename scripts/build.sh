@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT=${0:A:h:h}
+python3 "$ROOT/scripts/require_build_lease.py"
 export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 BUILD="$ROOT/build.noindex"
 APP="$BUILD/搞节奏.app"
@@ -21,14 +22,23 @@ done
 python3 "$ROOT/scripts/pack_icon.py" "$BUILD/icon.iconset" "$APP/Contents/Resources/GaoJieZou.icns"
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 MACROS="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib"
-swiftc -swift-version 5 -parse-as-library -O -sdk "$SDK" -target arm64-apple-macosx14.0 -module-cache-path "$BUILD/cache" -load-plugin-library "$MACROS" -F "$BUILD/Frameworks" -framework Rhythm -framework AppKit -framework SwiftUI -framework UserNotifications -framework CryptoKit -lsqlite3 -Xlinker -rpath -Xlinker @executable_path/../Frameworks "$ROOT/Host/"*.swift -o "$APP/Contents/MacOS/GaoJieZou"
+swiftc -swift-version 5 -parse-as-library -O -sdk "$SDK" -target arm64-apple-macosx14.0 -module-cache-path "$BUILD/cache" -load-plugin-library "$MACROS" -F "$BUILD/Frameworks" -framework Rhythm -framework RhythmHealth -framework RhythmFootprints -framework AppKit -framework SwiftUI -framework UserNotifications -framework CryptoKit -lsqlite3 -Xlinker -rpath -Xlinker @executable_path/../Frameworks "$ROOT/Host/"*.swift "$ROOT/Integration/Shared/IntegrationAuthority.swift" -o "$APP/Contents/MacOS/GaoJieZou"
 cp "$ROOT/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/GaoJieZouIcon.png" "$APP/Contents/Resources/"
 ditto "$BUILD/Frameworks/Rhythm.framework" "$APP/Contents/Frameworks/Rhythm.framework"
+for module in RhythmHealth RhythmFootprints; do
+    ditto "$BUILD/Frameworks/$module.framework" "$APP/Contents/Frameworks/$module.framework"
+    codesign --force --sign "$SIGNING_IDENTITY" "$APP/Contents/Frameworks/$module.framework"
+done
 for helper in "$APP"/Contents/Frameworks/Rhythm.framework/Versions/A/Resources/UsageEngine/tokscale(N); do codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$helper"; done
 codesign --force --sign "$SIGNING_IDENTITY" "$APP/Contents/Frameworks/Rhythm.framework"
 ditto "$BUILD/PlugIns/GaoJieZouWidgets.appex" "$APP/Contents/PlugIns/GaoJieZouWidgets.appex"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Widget.entitlements" "$APP/Contents/PlugIns/GaoJieZouWidgets.appex"
+for source in Health Footprints; do
+    name="Rhythm${source}Widgets"
+    ditto "$BUILD/PlugIns/$name.appex" "$APP/Contents/PlugIns/$name.appex"
+    codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Integrated/$source/Widgets/Widget.entitlements" "$APP/Contents/PlugIns/$name.appex"
+done
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/App.entitlements" "$APP"
 codesign --verify --deep --strict "$APP"
 echo "Built $APP"

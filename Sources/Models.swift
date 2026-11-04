@@ -33,6 +33,8 @@ enum RhythmSection: String, CaseIterable, Identifiable {
     case pasture
     case fishing
     case collection
+    case health
+    case footprints
 
     var id: String { rawValue }
 
@@ -50,6 +52,8 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .pasture: "牧场"
         case .fishing: "渔场"
         case .collection: "庄园图鉴"
+        case .health: "健康记录"
+        case .footprints: "旅行足迹"
         }
         return RhythmLocalization.text(key)
     }
@@ -68,6 +72,8 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .pasture: "在场景中搭窝、饲养与收取，让规律睡眠带来产出"
         case .fishing: "在湖边抛竿、管理鱼篓，并进入水族馆照料收藏"
         case .collection: "查看已经收获、饲养和发现的庄园物种"
+        case .health: "饮水、饮食、运动、体重、睡眠与健康岛屿"
+        case .footprints: "地图、旅行、照片、时间轴与旅行列车"
         }
         // 琐事奖励数值引用经济常量插值，避免界面提示与实际发放不一致。
         if self == .chores {
@@ -90,6 +96,8 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .pasture: "pawprint.fill"
         case .fishing: "fish.fill"
         case .collection: "books.vertical.fill"
+        case .health: "heart.fill"
+        case .footprints: "map.fill"
         }
     }
 }

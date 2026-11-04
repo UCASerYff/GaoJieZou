@@ -1,6 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT=${0:A:h:h}
+python3 "$ROOT/scripts/require_build_lease.py"
 APP=${GAO_PACKAGE_APP:-"$ROOT/build.noindex/搞节奏.app"}
 STAGE="$ROOT/.release.noindex"
 RELEASE_APP="$STAGE/搞节奏.app"
@@ -18,6 +19,12 @@ for helper in "$RELEASE_APP"/Contents/Frameworks/Rhythm.framework/Versions/A/Res
 done
 codesign --force --sign "$SIGNING_IDENTITY" "$RELEASE_APP/Contents/Frameworks/Rhythm.framework"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Widget.entitlements" "$RELEASE_APP/Contents/PlugIns/GaoJieZouWidgets.appex"
+for module in RhythmHealth RhythmFootprints; do
+    codesign --force --sign "$SIGNING_IDENTITY" "$RELEASE_APP/Contents/Frameworks/$module.framework"
+done
+for source in Health Footprints; do
+    codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Integrated/$source/Widgets/Widget.entitlements" "$RELEASE_APP/Contents/PlugIns/Rhythm${source}Widgets.appex"
+done
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/App.entitlements" "$RELEASE_APP"
 codesign --verify --deep --strict "$RELEASE_APP"
 ditto -c -k --keepParent --norsrc --noextattr "$RELEASE_APP" "$ROOT/dist/GaoJieZou-$VERSION.zip"

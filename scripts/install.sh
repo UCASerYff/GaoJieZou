@@ -9,6 +9,24 @@ SOURCE="$ROOT/build.noindex/搞节奏.app"
 UNPACKED=0
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Info.plist")
 
+# This integration candidate must never be installed ahead of the explicit,
+# verified authority cutover. A fixture plan cannot authorize a live install.
+if [[ "$VERSION" == 4.10 ]]; then
+    [[ -n "${GAO_RHYTHM_INTEGRATION_PLAN:-}" && -f "$GAO_RHYTHM_INTEGRATION_PLAN" ]] || { print -u2 '需要本轮真实迁移计划与active权威，拒绝提前安装'; exit 1; }
+    python3 "$ROOT/scripts/integrate_sources.py" verify --plan "$GAO_RHYTHM_INTEGRATION_PLAN" --runtime-only
+    python3 - "$GAO_RHYTHM_INTEGRATION_PLAN" <<'PYGATE'
+import json,sys
+from pathlib import Path
+p=json.loads(Path(sys.argv[1]).read_text())
+expected=Path.home()/'Library/Group Containers/5G96498KGJ.com.gaojiezou.rhythm'
+assert Path(p['targetGroup']).resolve()==expected.resolve(),'Fixture or foreign target group cannot authorize live installation'
+a=json.loads((expected/'Integration/authority.json').read_text())
+assert a['schemaVersion']==1 and a['state']=='active' and a['transactionID']==p['transactionID']
+assert a['sourceRevisions']==p['sourceRevisions'] and a.get('freezeReceiptSHA256'),'Missing actual cutover receipt'
+assert not (expected/'.rhythm-integration-maintenance.json').exists(),'Recovery is incomplete'
+PYGATE
+fi
+
 # Every expanded staging/rollback app has a .noindex ancestor before creation.
 ordinary_container() {
     [[ ! -L "$1" ]] || { print -u2 -- "拒绝符号链接容器：$1"; return 1; }
@@ -31,6 +49,21 @@ verify_bundle() {
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$widget/Contents/Info.plist")" == com.gaojiezou.rhythm.widgets ]] || return 1
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$widget/Contents/Info.plist")" ]] || return 1
     [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")" == "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$widget/Contents/Info.plist")" ]] || return 1
+    if [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")" == 4.10 ]]; then
+        local source extra expected version number
+        version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
+        number=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")
+        for source in Health Footprints; do
+            extra="$app/Contents/PlugIns/Rhythm${source}Widgets.appex"
+            expected="com.gaojiezou.rhythm.${source:l}.widgets"
+            [[ -d "$extra" && ! -L "$extra" && "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$extra/Contents/Info.plist")" == "$expected" ]] || return 1
+            [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extra/Contents/Info.plist")" == "$version" && "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$extra/Contents/Info.plist")" == "$number" ]] || return 1
+            [[ "$(codesign -dv "$extra" 2>&1 | sed -n 's/^TeamIdentifier=//p')" == "$TEAM" ]] || return 1
+            codesign --verify --strict "$extra" || return 1
+            [[ -d "$app/Contents/Frameworks/Rhythm${source}.framework" ]] || return 1
+            codesign --verify --strict "$app/Contents/Frameworks/Rhythm${source}.framework" || return 1
+        done
+    fi
     codesign --verify --deep --strict "$app" || return 1
     for part in "$app" "$widget"; do
         codesign --verify --strict "$part" || return 1
@@ -44,7 +77,65 @@ requirement() {
     print -r -- "$value"
 }
 register_formal() {
-    "$LSREGISTER" -f -R "$TARGET" && pluginkit -a "$TARGET/Contents/PlugIns/GaoJieZouWidgets.appex"
+    local extension bid
+    "$LSREGISTER" -f -R "$TARGET" || return 1
+    for extension in "$TARGET"/Contents/PlugIns/*.appex(N); do
+        bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$extension/Contents/Info.plist")
+        [[ "$bid" == com.gaojiezou.rhythm.* ]] || return 1
+        pluginkit -a "$extension" || return 1
+    done
+}
+unregister_formal_widgets() {
+    local extension bid version registration
+    for extension in "$TARGET"/Contents/PlugIns/*.appex(N); do
+        [[ ! -L "$extension" ]] || return 1
+        bid=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$extension/Contents/Info.plist") || return 1
+        version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$extension/Contents/Info.plist") || return 1
+        case "$bid:${extension:t}" in
+            com.gaojiezou.rhythm.widgets:GaoJieZouWidgets.appex|\
+            com.gaojiezou.rhythm.health.widgets:RhythmHealthWidgets.appex|\
+            com.gaojiezou.rhythm.footprints.widgets:RhythmFootprintsWidgets.appex) ;;
+            *) print -u2 '拒绝处理非本应用固定小组件'; return 1 ;;
+        esac
+        registration=$(formal_widget_registration "$extension" "$bid" "$version") || return 1
+        if [[ "$registration" == absent ]]; then
+            print -r -- "Already unregistered: $bid"
+            continue
+        fi
+        pluginkit -r "$extension" || return 1
+        [[ "$(formal_widget_registration "$extension" "$bid" "$version")" == absent ]] || return 1
+    done
+}
+formal_widget_registration() {
+    python3 - "$1" "$2" "$3" <<'PYWIDGETREG'
+import pathlib,re,subprocess,sys,uuid
+extension,bid,version=sys.argv[1:]
+allowed={'com.gaojiezou.rhythm.widgets':'GaoJieZouWidgets.appex',
+         'com.gaojiezou.rhythm.health.widgets':'RhythmHealthWidgets.appex',
+         'com.gaojiezou.rhythm.footprints.widgets':'RhythmFootprintsWidgets.appex'}
+def require(ok):
+    if not ok:raise RuntimeError('Formal widget registration is unreadable or changed')
+p=pathlib.Path(extension)
+require(bid in allowed and p.name==allowed[bid] and version and p.is_absolute() and
+        p.is_dir() and all(not q.is_symlink() for q in [p,*p.parents]))
+result=subprocess.run(['/usr/bin/pluginkit','-m','-A','-D','-vv','-i',bid],capture_output=True,text=True)
+require(result.returncode==0 and not result.stderr.strip())
+output=result.stdout
+headers=list(re.finditer(r'^\s*([+\-=!?]?)\s*'+re.escape(bid)+r'\(([^)\n]+)\)\s*$',output,re.M))
+if not headers:
+    require(output.strip() in ('', '(no matches)') or
+            re.fullmatch(r'0\s+plug-in(?:\(s\)|s)?',output.strip()) is not None)
+    print('absent')
+else:
+    require(len(headers)==1)
+    header=headers[0]
+    paths=re.findall(r'^\s*Path = (.+)$',output,re.M)
+    identifiers=re.findall(r'^\s*UUID = (.+)$',output,re.M)
+    require(header.group(2)==version and paths==[extension] and len(identifiers)==1 and
+            re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',identifiers[0]) is not None and
+            uuid.UUID(identifiers[0]).int!=0)
+    print('present')
+PYWIDGETREG
 }
 no_main_process() {
     local query_status
@@ -94,7 +185,7 @@ finish_install() {
     set +e
     if (( code != 0 && REPLACEMENT_STARTED )); then
         "$LSREGISTER" -u "$TARGET" >/dev/null 2>&1
-        pluginkit -r "$TARGET/Contents/PlugIns/GaoJieZouWidgets.appex" >/dev/null 2>&1
+        unregister_formal_widgets >/dev/null 2>&1
         if [[ -L "$TARGET" ]]; then
             print -u2 '正式路径意外变为符号链接，停止自动恢复；压缩回滚备份保留'
         elif (( HAD_OLD && ARCHIVE_READY )); then
@@ -197,11 +288,19 @@ fi
 
 # No backup, temporary app or restored app is registered outside the formal path.
 no_main_process
-REPLACEMENT_STARTED=1
 if (( HAD_OLD )); then
-    pluginkit -r "$TARGET/Contents/PlugIns/GaoJieZouWidgets.appex"
-    "$LSREGISTER" -u "$TARGET"
+    if ! unregister_formal_widgets; then
+        receipt_status pre-replacement-widget-unregister-failed-formal-program-preserved
+        exit 1
+    fi
+    if ! "$LSREGISTER" -u "$TARGET"; then
+        receipt_status pre-replacement-host-unregister-failed-formal-program-preserved
+        exit 1
+    fi
+    REPLACEMENT_STARTED=1
     rm -rf "$TARGET"
+else
+    REPLACEMENT_STARTED=1
 fi
 ditto "$SOURCE" "$TARGET"
 verify_bundle "$TARGET"

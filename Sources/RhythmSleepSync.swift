@@ -11,7 +11,7 @@ final class RhythmSleepSync {
 
     var enabled: Bool {
         let environment = ProcessInfo.processInfo.environment
-        if environment["GAOSERIES_SLEEP_TEST_DIRECTORY"] != nil { return true }
+        if SharedSleepStore.testDirectoryOverride != nil { return true }
 #if SMOKE_TEST || WIDGET_SYNC_TEST
         return false
 #else
@@ -44,7 +44,13 @@ final class RhythmSleepSync {
         let shared = try database()
         // Only the first upgrade may import overlapping historical IDs. New
         // locally queued records must use the same duplicate check as the UI.
-        try shared.seedLegacyOnce(records.map(\.sharedSleepEntry), key: SharedSleepStore.legacyMigrationKey)
+        if SharedSleepStore.testDirectoryOverride != nil {
+            try shared.seedLegacyOnce(records.map(\.sharedSleepEntry), key: SharedSleepStore.legacyMigrationKey)
+        } else {
+            guard try shared.hasLegacyMigration(SharedSleepStore.legacyMigrationKey) else {
+                throw SharedSleepError.storage("迁入睡眠缺少原历史导入凭据，已停止同步；不会重新导入或重复发奖。")
+            }
+        }
         let canonical = try shared.records()
         for record in records where !canonical.contains(where: { $0.id == record.id }) {
             var settlement = record

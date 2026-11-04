@@ -2,7 +2,7 @@ import Foundation
 import SQLite3
 import Darwin
 
-/// Wire format shared by the two independent applications. Keep this file identical in both repos.
+/// Wire format preserved by the integrated Rhythm/Health modules.
 /// Reward bookkeeping belongs to Rhythm and survives edits made by Health.
 struct SharedSleepEntry: Codable, Equatable, Identifiable {
     var id: String
@@ -41,29 +41,47 @@ enum SharedSleepError: LocalizedError {
 /// One canonical journal, independent of each app's game save. SQL transactions serialize writes
 /// across processes; tombstones stop an older app snapshot from re-importing a deleted record.
 final class SharedSleepStore {
-    static let groupID = "5G96498KGJ.com.gaoseries.GaoJianKang"
-    static let changedNotification = Notification.Name("GaoSeries.sleep.changed")
+    static let groupID = "5G96498KGJ.com.gaojiezou.rhythm"
+    static let changedNotification = Notification.Name("GaoSeries.rhythm.integration.sleep.changed")
     static let fileName = "sleep-records.sqlite"
     static let legacyMigrationKey = "rhythm-library-v1"
     let directory: URL
     private var db: OpaquePointer?
+    private var openedFileIdentity: (device: UInt64, inode: UInt64)?
     private let connectionLock = NSRecursiveLock()
+    private let authorityTransactionID: String?
 
+    static var testDirectoryOverride: String? {
+        #if INTEGRATION_PATH_TEST || SHARED_SLEEP_TEST
+        return ProcessInfo.processInfo.environment["GAOSERIES_SLEEP_TEST_DIRECTORY"]
+        #else
+        return nil
+        #endif
+    }
     static func location() throws -> URL {
-        if let override = ProcessInfo.processInfo.environment["GAOSERIES_SLEEP_TEST_DIRECTORY"] {
+        if let override = testDirectoryOverride {
             guard !override.isEmpty else { throw SharedSleepError.storage("Empty test directory") }
             return URL(fileURLWithPath: override, isDirectory: true)
         }
-        guard let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) else {
-            throw SharedSleepError.storage("无法访问共享容器，请使用已签名版本 / Signed shared container unavailable")
-        }
-        return group.appendingPathComponent("SharedSleep", isDirectory: true)
+        return try RhythmIntegrationPaths.sharedSleepDirectory()
     }
 
     init(directory: URL? = nil) throws {
+        if directory == nil && Self.testDirectoryOverride == nil {
+            authorityTransactionID = try RhythmIntegrationPaths.authority().transactionID
+        } else { authorityTransactionID = nil }
         self.directory = try directory ?? Self.location()
+        try withWriteLease {
+            if let expected = authorityTransactionID {
+                guard try RhythmIntegrationPaths.authority().transactionID == expected,
+                      try RhythmIntegrationPaths.sharedSleepDirectory().standardizedFileURL == self.directory.standardizedFileURL else {
+                    throw SharedSleepError.storage("Shared sleep authority changed before opening")
+                }
+            }
         let fm = FileManager.default
-        try fm.createDirectory(at: self.directory, withIntermediateDirectories: true)
+        if authorityTransactionID == nil {
+            try fm.createDirectory(at: self.directory, withIntermediateDirectories: true)
+        }
         // This lock only protects first initialization; SQLite handles all record transactions.
         // It also prevents a second launch from mistaking an in-progress new DB for corruption.
         let lockURL = self.directory.appendingPathComponent(".initialization.lock")
@@ -76,6 +94,9 @@ final class SharedSleepStore {
         let marker = self.directory.appendingPathComponent(".initialized")
         let exists = fm.fileExists(atPath: url.path)
         if !exists {
+            guard authorityTransactionID == nil else {
+                throw SharedSleepError.storage("Migrated shared sleep database missing; refusing CREATE")
+            }
             guard !fm.fileExists(atPath: marker.path),
                   !fm.fileExists(atPath: url.path + "-wal"),
                   !fm.fileExists(atPath: url.path + "-shm") else {
@@ -96,6 +117,13 @@ final class SharedSleepStore {
             sqlite3_close(db); db = nil
             throw failure
         }
+        let openedAttributes = try fm.attributesOfItem(atPath: url.path)
+        guard let device = openedAttributes[.systemNumber] as? NSNumber,
+              let inode = openedAttributes[.systemFileNumber] as? NSNumber else {
+            sqlite3_close(db); db = nil
+            throw SharedSleepError.storage("Cannot bind shared sleep database identity")
+        }
+        openedFileIdentity = (device.uint64Value, inode.uint64Value)
         do {
             guard sqlite3_busy_timeout(db, 10_000) == SQLITE_OK else { throw sqlError() }
             if exists {
@@ -110,6 +138,7 @@ final class SharedSleepStore {
                     try execute("PRAGMA user_version=1")
                 }
             }
+            try withWriteLease {
             // A schema-1 journal from an earlier build may predate migration receipts.
             // Existing records were validated above; this additive table cannot replace them.
             try execute("CREATE TABLE IF NOT EXISTS sleep_migrations (key TEXT PRIMARY KEY NOT NULL)")
@@ -118,9 +147,11 @@ final class SharedSleepStore {
             if !fm.fileExists(atPath: marker.path) {
                 try Data("SharedSleep schema 1\n".utf8).write(to: marker, options: .atomic)
             }
+            }
         } catch {
             sqlite3_close(db); db = nil
             throw error
+        }
         }
     }
 
@@ -397,11 +428,15 @@ final class SharedSleepStore {
     }
 
     private func transaction(_ work: () throws -> Void) throws {
-        try execute("BEGIN IMMEDIATE")
-        do { try work(); try execute("COMMIT") }
-        catch { try? execute("ROLLBACK"); throw error }
+        try withWriteLease {
+            try validateAuthority()
+            try execute("BEGIN IMMEDIATE")
+            do { try validateAuthority(); try work(); try execute("COMMIT") }
+            catch { try? execute("ROLLBACK"); throw error }
+        }
     }
     private func prepare(_ sql: String) throws -> OpaquePointer {
+        try validateAuthority()
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK, let result = statement else { throw sqlError() }
         return result
@@ -417,5 +452,25 @@ final class SharedSleepStore {
     }
     private func postChange() {
         DistributedNotificationCenter.default().postNotificationName(Self.changedNotification, object: nil, userInfo: nil, deliverImmediately: true)
+    }
+
+    private func validateAuthority() throws {
+        if let expected = authorityTransactionID {
+            let current = try RhythmIntegrationPaths.authority()
+            let attributes = try FileManager.default.attributesOfItem(atPath: directory.appendingPathComponent(Self.fileName).path)
+            guard let opened = openedFileIdentity,
+                  (attributes[.systemNumber] as? NSNumber)?.uint64Value == opened.device,
+                  (attributes[.systemFileNumber] as? NSNumber)?.uint64Value == opened.inode else {
+                throw SharedSleepError.storage("Shared sleep database was replaced; reopen before reading or writing")
+            }
+            guard current.transactionID == expected,
+                  try RhythmIntegrationPaths.sharedSleepDirectory().standardizedFileURL == directory.standardizedFileURL else {
+                throw SharedSleepError.storage("Shared sleep authority changed; reopen after the migration is verified")
+            }
+        }
+    }
+    private func withWriteLease<T>(_ body: () throws -> T) throws -> T {
+        if authorityTransactionID != nil { return try RhythmIntegrationPaths.withWriterLease(body) }
+        return try body()
     }
 }
