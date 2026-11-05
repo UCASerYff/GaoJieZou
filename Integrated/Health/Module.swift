@@ -39,34 +39,101 @@ private struct HealthActivationGate<Content: View>: View {
     }
 }
 
+/// The merged host owns navigation; these are individual content pages only.
+public enum HealthNavigationPage: String, CaseIterable, Hashable {
+    case overview, events, water, sleep, meals, exercise, weight, trends, island
+
+    var selectedTab: Int {
+        switch self {
+        case .overview: 0
+        case .events: 5
+        case .water: 6
+        case .sleep: 10
+        case .meals: 7
+        case .exercise: 8
+        case .weight: 9
+        case .trends: 2
+        case .island: 3
+        }
+    }
+
+    init?(selectedTab: Int) {
+        guard let page = Self.allCases.first(where: { $0.selectedTab == selectedTab }) else { return nil }
+        self = page
+    }
+}
+
 public struct HealthModuleView: View {
+    private let page: HealthNavigationPage
     private let route: URL?
     private let routeRevision: Int
-    public init(route: URL? = nil, routeRevision: Int = 0) { self.route = route; self.routeRevision = routeRevision }
-    public var body: some View { HealthActivationGate { ActiveHealthModuleView(route: route, routeRevision: routeRevision) } }
+    private let onNavigate: ((HealthNavigationPage) -> Void)?
+    public init(page: HealthNavigationPage = .overview, route: URL? = nil, routeRevision: Int = 0,
+                onNavigate: ((HealthNavigationPage) -> Void)? = nil) {
+        self.page = page; self.route = route; self.routeRevision = routeRevision; self.onNavigate = onNavigate
+    }
+    public var body: some View {
+        HealthActivationGate {
+            ActiveHealthModuleView(page: page, route: route, routeRevision: routeRevision, onNavigate: onNavigate)
+        }
+    }
 }
 
 private struct ActiveHealthModuleView: View {
     @ObservedObject private var store = HealthRuntime.store
+    @State private var displayedPage: HealthNavigationPage
+    private let page: HealthNavigationPage
     private let route: URL?
     private let routeRevision: Int
-    public init(route: URL? = nil, routeRevision: Int = 0) {
-        self.route = route
-        self.routeRevision = routeRevision
+    private let onNavigate: ((HealthNavigationPage) -> Void)?
+    init(page: HealthNavigationPage, route: URL?, routeRevision: Int,
+         onNavigate: ((HealthNavigationPage) -> Void)?) {
+        self.page = page; self.route = route; self.routeRevision = routeRevision; self.onNavigate = onNavigate
+        _displayedPage = State(initialValue: page)
     }
-    public var body: some View {
-        ContentView()
+    var body: some View {
+        ContentView(page: contentPage)
             .environmentObject(store)
             .environment(\.locale, Locale(identifier: store.en ? "en_US" : "zh_CN"))
-            .onAppear { store.syncSleepRewards(); handleRoute() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.game"))) { _ in store.selectedTab = 3 }
+            .onAppear { enter(page); store.syncSleepRewards(); handleRoute() }
+            .onChange(of: page) { _, value in enter(value) }
+            .onChange(of: store.selectedTab) { _, tab in
+                guard let value = HealthNavigationPage(selectedTab: tab) else { return }
+                let previous = displayedPage
+                displayedPage = value
+                if let onNavigate {
+                    if value != page { onNavigate(value) }
+                } else if value == .island && previous != value { store.welcome() }
+            }
             .onChange(of: routeRevision) { _, _ in handleRoute() }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.game"))) { _ in
+                select(.island); onNavigate?(.island)
+            }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.new"))) { _ in store.new(.meal) }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.water"))) { _ in store.addWater() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.sleep"))) { _ in store.newSleep() }
-            // 备份导出/恢复收拢到 app 级「数据」页：模块内入口已移除，能力经通知触发。
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.export"))) { _ in store.backup() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.import"))) { _ in store.restore() }
+    }
+    private var contentPage: HealthNavigationPage {
+        // With a host callback, its page is authoritative even on the first
+        // frame. The fallback keeps older route-only embedding source-compatible.
+        if case .some = onNavigate { return page }
+        return displayedPage
+    }
+    private func enter(_ value: HealthNavigationPage) {
+        let previouslyDisplayed = displayedPage
+        select(value)
+        if value == .island {
+            if case .some = onNavigate { store.welcome() }
+            else if previouslyDisplayed == value { store.welcome() }
+        }
+    }
+    private func select(_ value: HealthNavigationPage) {
+        let previous = displayedPage
+        displayedPage = value
+        if store.selectedTab != value.selectedTab { store.selectedTab = value.selectedTab }
+        if case .none = onNavigate, value == .island && previous != value { store.welcome() }
     }
     private func handleRoute() {
         guard routeRevision > HealthRuntime.handledRouteRevision, let route,
@@ -75,10 +142,22 @@ private struct ActiveHealthModuleView: View {
         let destination = route.path.split(separator: "/").first.map(String.init) ?? ""
         if destination == "export" { store.backup() }
         else if destination == "import" { store.restore() }
-        else if destination == "sleep" { store.selectedTab = 10 }
-        else if destination == "events" { store.selectedTab = 5 }
-        else if let kind = RecordKind(rawValue: destination) { store.new(kind) }
-        else { store.selectedTab = 0 }
+        else if destination == "sleep" { select(.sleep) }
+        else if destination == "events" { select(.events) }
+        else if destination == "island" || destination == "game" { select(.island) }
+        else if destination == "trends" { select(.trends) }
+        else if let kind = RecordKind(rawValue: destination) {
+            let target: HealthNavigationPage = switch kind {
+            case .water: .water
+            case .meal: .meals
+            case .exercise: .exercise
+            case .weight: .weight
+            }
+            select(target)
+            store.new(kind)
+        }
+        else { select(.overview) }
+        onNavigate?(displayedPage)
     }
 }
 

@@ -117,7 +117,7 @@ private struct MainWindowContent: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Standalone.consumeIntegratedURL"))) { _ in consumeIntegratedAction() }
             .onOpenURL { url in
                 route = integratedURL(url)
-                revision &+= 1
+                revision = delegate.nextIntegratedRouteRevision()
                 showMainWindow()
             }
     }
@@ -125,7 +125,7 @@ private struct MainWindowContent: View {
     private func consumeIntegratedAction() {
         guard let url = delegate.pendingIntegratedURL else { return }
         delegate.pendingIntegratedURL = nil
-        route = url; revision &+= 1
+        route = url; revision = delegate.nextIntegratedRouteRevision()
     }
 }
 
@@ -170,6 +170,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     var showMainWindow: (() -> Void)?
     var showSettings: (() -> Void)?
     var pendingIntegratedURL: URL?
+    // Module route guards live for the process; window recreation must not
+    // restart its sequence and accidentally discard the next incoming action.
+    private var integratedRouteRevision = 0
+    func nextIntegratedRouteRevision() -> Int {
+        integratedRouteRevision &+= 1
+        return integratedRouteRevision
+    }
     func openIntegratedAction(_ module: String, _ action: String) {
         guard let url = URL(string: "gaojiezou://\(module)/\(action)") else { return }
         pendingIntegratedURL = url

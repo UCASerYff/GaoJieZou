@@ -264,7 +264,7 @@ struct SleepDashboard: View {
                         }
                         .buttonStyle(.borderless)
                     }
-                    Text(RhythmLocalization.text("与搞健康自动同步，在任一应用记录一次即可；搞健康删除的记录也会同步移除。"))
+                    Text(RhythmLocalization.text("与健康管理的睡眠记录共享同一份资料，在任一睡眠页面记录一次即可；删除也会同步。"))
                         .font(.caption).foregroundStyle(.secondary)
                     if let error = store.sleepSyncError {
                         Label(error, systemImage: "exclamationmark.triangle")

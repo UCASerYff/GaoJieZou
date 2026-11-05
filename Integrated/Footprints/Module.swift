@@ -52,55 +52,122 @@ private struct FootprintsActivationGate<Content: View>: View {
     }
 }
 
+/// The main Rhythm sidebar owns navigation; each module view shows one leaf.
+public enum FootprintsNavigationPage: String {
+    case map, trips, timeline, residentCity, train
+
+    var section: String {
+        switch self {
+        case .map: "地图"
+        case .trips: "旅行"
+        case .timeline: "时间轴"
+        case .residentCity: "常驻城市"
+        case .train: "列车"
+        }
+    }
+
+    init?(section: String) {
+        switch section {
+        case "地图": self = .map
+        case "旅行": self = .trips
+        case "时间轴": self = .timeline
+        case "常驻城市": self = .residentCity
+        case "列车": self = .train
+        default: return nil
+        }
+    }
+}
+
 public struct FootprintsModuleView: View {
+    private let page: FootprintsNavigationPage
     private let route: URL?
     private let routeRevision: Int
-    public init(route: URL? = nil, routeRevision: Int = 0) {
-        self.route = route; self.routeRevision = routeRevision
+    private let onNavigate: ((FootprintsNavigationPage) -> Void)?
+    public init(page: FootprintsNavigationPage = .map, route: URL? = nil, routeRevision: Int = 0,
+                onNavigate: ((FootprintsNavigationPage) -> Void)? = nil) {
+        self.page = page; self.route = route; self.routeRevision = routeRevision
+        self.onNavigate = onNavigate
     }
     public var body: some View {
-        FootprintsActivationGate { ActiveFootprintsModuleView(route: route, routeRevision: routeRevision) }
+        FootprintsActivationGate {
+            ActiveFootprintsModuleView(page: page, route: route, routeRevision: routeRevision,
+                                       onNavigate: onNavigate)
+        }
     }
 }
 
 private struct ActiveFootprintsModuleView: View {
     @ObservedObject private var store = FootprintsRuntime.store
     @AppStorage("gqns.appearance", store: FootprintsBundle.defaults) private var appearance = "system"
+    @State private var displayedPage: FootprintsNavigationPage
+    let page: FootprintsNavigationPage
     let route: URL?
     let routeRevision: Int
+    let onNavigate: ((FootprintsNavigationPage) -> Void)?
+
+    init(page: FootprintsNavigationPage, route: URL?, routeRevision: Int,
+         onNavigate: ((FootprintsNavigationPage) -> Void)?) {
+        self.page = page; self.route = route; self.routeRevision = routeRevision
+        self.onNavigate = onNavigate
+        _displayedPage = State(initialValue: page)
+    }
+
+    private var contentPage: FootprintsNavigationPage {
+        onNavigate == nil ? displayedPage : page
+    }
+
     var body: some View {
-        RootView().environmentObject(store)
+        RootView(page: contentPage).environmentObject(store)
             .environment(\.locale, Locale(identifier: GQNSLanguage.localeIdentifier))
             .preferredColorScheme(AppAppearance(rawValue: appearance)?.colorScheme)
-            .onAppear(perform: handleRoute)
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.game"))) { _ in store.section = "列车" }
+            .onAppear { select(page); handleRoute() }
+            .onChange(of: page) { _, value in select(value) }
+            .onChange(of: store.section) { _, value in
+                if let destination = FootprintsNavigationPage(section: value) {
+                    displayedPage = destination
+                    if destination != page { onNavigate?(destination) }
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.game"))) { _ in select(.train) }
             .onChange(of: routeRevision) { _, _ in handleRoute() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.new"))) { _ in store.editor = EditorRequest() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.search"))) { _ in
-                store.section = "地图"; NotificationCenter.default.post(name: .focusSearch, object: nil)
+                select(.map); focusSearch()
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.undo"))) { _ in store.undo() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.export"))) { _ in store.exportBackup() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.import"))) { _ in store.restoreBackup() }
     }
+
+    private func select(_ destination: FootprintsNavigationPage) {
+        displayedPage = destination
+        if store.section != destination.section { store.section = destination.section }
+        if destination != page { onNavigate?(destination) }
+    }
+
+    private func focusSearch() {
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .focusSearch, object: nil) }
+    }
+
     private func handleRoute() {
         guard routeRevision > FootprintsRuntime.handledRouteRevision, let route,
               route.scheme == "gaojiezou", route.host == "footprints" else { return }
         FootprintsRuntime.handledRouteRevision = routeRevision
         let section = route.path.split(separator: "/").first.map(String.init) ?? "map"
         switch section {
-        case "train": store.section = "列车"
-        case "trips": store.section = "旅行"
-        case "timeline": store.section = "时间轴"
+        case "train": select(.train)
+        case "trips": select(.trips)
+        case "timeline": select(.timeline)
+        case "residentCity", "resident-city", "home": select(.residentCity)
         case "new": if store.ready { store.editor = EditorRequest() }
         case "search":
-            store.section = "地图"
-            NotificationCenter.default.post(name: .focusSearch, object: nil)
+            select(.map)
+            focusSearch()
         case "undo": store.undo()
         case "export": store.exportBackup()
         case "import": store.restoreBackup()
         default:
-            store.section = "地图"
+            select(.map)
             let scope = URLComponents(url: route, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "scope" }?.value
             store.search = ""; store.year = 0; store.tripFilter = ""; store.selectedCity = nil
             if scope == "china" || scope == "world" { store.widgetMapScope = scope; store.widgetMapNavigationRevision &+= 1 }

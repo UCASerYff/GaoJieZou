@@ -29,8 +29,10 @@ struct ContentView: View {
             ZStack {
                 settings.canvasColor(for: colorScheme).ignoresSafeArea()
                 VStack(spacing: 0) {
-                    SectionHeader(section: selection)
-                        .id(settings.language)
+                    if !selection.isIntegrated {
+                        SectionHeader(section: selection)
+                            .id(settings.language)
+                    }
                     detail
                         .id(settings.language)
                 }
@@ -50,9 +52,11 @@ struct ContentView: View {
                 .keyboardShortcut("s", modifiers: [.command, .control])
                 .help(RhythmLocalization.text(sidebarHidden ? "显示侧边栏" : "隐藏侧边栏"))
             }
-            toolbarItemNoChrome(.primaryAction) {
-                HStack(spacing: 12) {}
-                    .frame(width: 360, alignment: .trailing)
+            if !selection.isIntegrated {
+                toolbarItemNoChrome(.primaryAction) {
+                    HStack(spacing: 12) {}
+                        .frame(width: 360, alignment: .trailing)
+                }
             }
         }
         .alert(RhythmLocalization.text("提示"), isPresented: Binding(
@@ -73,6 +77,9 @@ struct ContentView: View {
             store.notice = energy>0 ? "睡眠已保存 · 牧场收益已结算 · 健康活力 +\(Int(energy))（每日最多 +24）" : "睡眠已保存 · 牧场收益已结算 · 健康活力今日额度已满或该睡眠已结算"
         }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.rhythm.game"))) { _ in selection = .farm }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.game"))) { _ in selection = .healthIsland }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.game"))) { _ in selection = .footprintsTrain }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.search"))) { _ in selection = .footprintsMap }
         .onReceive(NotificationCenter.default.publisher(for: .rhythmSelectSection)) { note in
             guard let rawValue = note.userInfo?["section"] as? String,
                   let section = RhythmSection(rawValue: rawValue) else { return }
@@ -105,12 +112,7 @@ struct ContentView: View {
     }
 
     private func handleRoute(_ url: URL) {
-        switch url.host {
-        case "longGoals": selection = .longGoals
-        case "health": selection = .health
-        case "footprints": selection = .footprints
-        default: selection = .today
-        }
+        selection = RhythmSection.destination(for: url)
     }
 
     // MARK: 自绘侧边栏（词元标杆）：品牌头部 + 浮动卡片选中态导航行 + 状态底卡
@@ -122,8 +124,9 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     sidebarSection(RhythmLocalization.text("节奏管理"), sections: [.today, .habits, .chores, .focus, .sleep, .statistics])
                     sidebarSection(RhythmLocalization.text("目标规划"), sections: [.longGoals, .shortActions])
-                    sidebarSection(RhythmLocalization.text("健康与旅行"), sections: [.health, .footprints])
-                    sidebarSection(RhythmLocalization.text("奖励系统"), sections: [.farm, .pasture, .fishing, .collection])
+                    sidebarSection(RhythmLocalization.text("健康管理"), sections: RhythmSection.healthPages)
+                    sidebarSection(RhythmLocalization.text("旅行足迹"), sections: RhythmSection.travelPages)
+                    sidebarSection(RhythmLocalization.text("奖励系统"), sections: RhythmSection.rewardPages)
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 14)
@@ -147,7 +150,7 @@ struct ContentView: View {
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(RhythmLocalization.text("搞节奏")).font(.headline)
-                Text(RhythmLocalization.text("节奏、目标与庄园")).font(.caption2).foregroundStyle(.secondary)
+                Text(RhythmLocalization.text("节奏、健康与旅途")).font(.caption2).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
@@ -267,10 +270,11 @@ struct ContentView: View {
             FishingHubView()
         case .collection:
             CollectionView()
-        case .health:
-            IntegratedHealthView(route: route, routeRevision: routeRevision)
-        case .footprints:
-            IntegratedFootprintsView(route: route, routeRevision: routeRevision)
+        case .healthOverview, .healthEvents, .healthWater, .healthSleep, .healthMeals,
+             .healthExercise, .healthWeight, .healthTrends, .healthIsland:
+            IntegratedHealthView(section: selection, route: route, routeRevision: routeRevision) { selection = $0 }
+        case .footprintsMap, .footprintsTrips, .footprintsTimeline, .footprintsResidentCity, .footprintsTrain:
+            IntegratedFootprintsView(section: selection, route: route, routeRevision: routeRevision) { selection = $0 }
         }
     }
 

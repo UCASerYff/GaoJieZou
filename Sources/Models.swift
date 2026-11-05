@@ -33,8 +33,21 @@ enum RhythmSection: String, CaseIterable, Identifiable {
     case pasture
     case fishing
     case collection
-    case health
-    case footprints
+    // Preserve the existing scene-storage values while making them leaf pages.
+    case healthOverview = "health"
+    case healthEvents
+    case healthWater
+    case healthSleep
+    case healthMeals
+    case healthExercise
+    case healthWeight
+    case healthTrends
+    case healthIsland
+    case footprintsMap = "footprints"
+    case footprintsTrips
+    case footprintsTimeline
+    case footprintsResidentCity
+    case footprintsTrain
 
     var id: String { rawValue }
 
@@ -52,8 +65,20 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .pasture: "牧场"
         case .fishing: "渔场"
         case .collection: "庄园图鉴"
-        case .health: "健康记录"
-        case .footprints: "旅行足迹"
+        case .healthOverview: "今日概览"
+        case .healthEvents: "快速事项"
+        case .healthWater: "喝水记录"
+        case .healthSleep: "睡眠记录"
+        case .healthMeals: "饮食记录"
+        case .healthExercise: "运动记录"
+        case .healthWeight: "体重记录"
+        case .healthTrends: "统计趋势"
+        case .healthIsland: "荒岛生活"
+        case .footprintsMap: "地图"
+        case .footprintsTrips: "旅行"
+        case .footprintsTimeline: "时间轴"
+        case .footprintsResidentCity: "常驻城市"
+        case .footprintsTrain: "旅行列车"
         }
         return RhythmLocalization.text(key)
     }
@@ -72,8 +97,20 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .pasture: "在场景中搭窝、饲养与收取，让规律睡眠带来产出"
         case .fishing: "在湖边抛竿、管理鱼篓，并进入水族馆照料收藏"
         case .collection: "查看已经收获、饲养和发现的庄园物种"
-        case .health: "饮水、饮食、运动、体重、睡眠与健康岛屿"
-        case .footprints: "地图、旅行、照片、时间轴与旅行列车"
+        case .healthOverview: "查看今天的健康记录与目标"
+        case .healthEvents: "记录日常健康事项"
+        case .healthWater: "查看与记录每日饮水"
+        case .healthSleep: "与睡眠计时共享同一份睡眠记录"
+        case .healthMeals: "查看与记录每日饮食"
+        case .healthExercise: "查看与记录运动"
+        case .healthWeight: "查看与记录体重"
+        case .healthTrends: "回顾健康记录与趋势"
+        case .healthIsland: "照料小岛，管理活力与物资"
+        case .footprintsMap: "点亮走过的地方并查看照片"
+        case .footprintsTrips: "整理旅行与足迹"
+        case .footprintsTimeline: "按时间回顾足迹"
+        case .footprintsResidentCity: "管理常驻城市"
+        case .footprintsTrain: "规划列车线路，管理车厢与物资"
         }
         // 琐事奖励数值引用经济常量插值，避免界面提示与实际发放不一致。
         if self == .chores {
@@ -96,8 +133,58 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .pasture: "pawprint.fill"
         case .fishing: "fish.fill"
         case .collection: "books.vertical.fill"
-        case .health: "heart.fill"
-        case .footprints: "map.fill"
+        case .healthOverview: "heart.fill"
+        case .healthEvents: "square.grid.3x3.fill"
+        case .healthWater: "drop.fill"
+        case .healthSleep: "moon.stars.fill"
+        case .healthMeals: "fork.knife"
+        case .healthExercise: "figure.walk"
+        case .healthWeight: "scalemass.fill"
+        case .healthTrends: "chart.xyaxis.line"
+        case .healthIsland: "tree.fill"
+        case .footprintsMap: "map.fill"
+        case .footprintsTrips: "suitcase.rolling"
+        case .footprintsTimeline: "clock"
+        case .footprintsResidentCity: "house.fill"
+        case .footprintsTrain: "tram.fill"
+        }
+    }
+
+    static let healthPages: [Self] = [.healthOverview, .healthEvents, .healthWater, .healthSleep,
+                                    .healthMeals, .healthExercise, .healthWeight, .healthTrends]
+    static let travelPages: [Self] = [.footprintsMap, .footprintsTrips, .footprintsTimeline, .footprintsResidentCity]
+    static let rewardPages: [Self] = [.farm, .pasture, .fishing, .collection, .healthIsland, .footprintsTrain]
+
+    var isIntegrated: Bool {
+        Self.healthPages.contains(self) || Self.travelPages.contains(self) ||
+            self == .healthIsland || self == .footprintsTrain
+    }
+
+    static func destination(for url: URL) -> Self {
+        let action = url.path.split(separator: "/").first.map(String.init) ?? ""
+        switch url.host {
+        case "longGoals": return .longGoals
+        case "health":
+            switch action {
+            case "events": return .healthEvents
+            case "water": return .healthWater
+            case "sleep": return .healthSleep
+            case "meal": return .healthMeals
+            case "exercise": return .healthExercise
+            case "weight": return .healthWeight
+            case "trends": return .healthTrends
+            case "island", "game": return .healthIsland
+            default: return .healthOverview
+            }
+        case "footprints":
+            switch action {
+            case "train": return .footprintsTrain
+            case "trips": return .footprintsTrips
+            case "timeline": return .footprintsTimeline
+            case "resident-city", "residentCity", "home": return .footprintsResidentCity
+            default: return .footprintsMap
+            }
+        default: return .today
         }
     }
 }

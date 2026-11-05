@@ -147,7 +147,7 @@
 "醒来，结束睡眠" = "Wake Up & End Sleep";
 "放弃记录" = "Discard Record";
 "放弃这次睡眠记录？" = "Discard this sleep record?";
-"睡眠记录" = "Sleep History";
+"睡眠记录" = "Sleep Records";
 "完成第一次睡眠计时后，记录会出现在这里。" = "Your first completed sleep session will appear here.";
 "保留计时" = "Keep Timing";
 "可以锁屏或合盖；如果关机，请在下次开机后打开“搞节奏”结束记录。开始时间会立即保存，不会丢失。" = "You may lock the Mac or close the lid. If you shut down, reopen Rhythm after startup to finish the record. The start time is saved immediately.";
@@ -177,7 +177,7 @@
 "手动录入睡眠记录" = "Sleep Logged Manually";
 "同步记录" = "Sync Records";
 "搞健康" = "Health";
-"与搞健康自动同步，在任一应用记录一次即可；搞健康删除的记录也会同步移除。" = "Sleep records sync automatically with Health. Log once in either app; deletions in Health sync here too.";
+"与健康管理的睡眠记录共享同一份资料，在任一睡眠页面记录一次即可；删除也会同步。" = "Sleep pages in Health and Sleep Tracking share the same records. Log once in either page; deletions stay in sync.";
 "只能记录已结束的睡眠，请选择更早的夜晚。" = "Only completed sleep can be logged. Choose an earlier night.";
 "起床时间必须晚于就寝时间，且不能晚于现在。" = "Wake time must follow bedtime and cannot be in the future.";
 "睡眠记录保存失败，原资料已保留，请重试。" = "Sleep could not be saved. Your existing data is preserved; please retry.";
@@ -716,7 +716,7 @@
 "运动" = "Activity";
 "%d 餐" = "%d meals";
 "%d 分钟" = "%d min";
-"今日还没有健康数据，去搞健康记录。" = "No health data yet today — log it in Gao Health.";
+"健康资料尚不可用；请检查整合状态，或在本应用的健康记录中添加。" = "Health data is unavailable. Check integration status or use the Health pages in this app.";
 "隐藏侧边栏" = "Hide Sidebar";
 "显示侧边栏" = "Show Sidebar";
 "节奏、目标与庄园" = "Rhythm, goals and your estate";
@@ -735,3 +735,35 @@
 "点击补打卡" = "Check in";
 "补打日常打卡" = "Backfilled Habit Check-in";
 "补打 %@ 的“%@”，获得 %d 金币。" = "Backfilled “%2$@” for %1$@ and earned %3$d coins.";
+
+// V4.10 single main navigation
+"健康管理" = "Health";
+"节奏、健康与旅途" = "Rhythm, health and travel";
+"旅行足迹" = "Travel";
+"今日概览" = "Health Overview";
+"快速事项" = "Quick Events";
+"喝水记录" = "Water Records";
+"饮食记录" = "Meal Records";
+"运动记录" = "Activity Records";
+"体重记录" = "Weight Records";
+"统计趋势" = "Health Trends";
+"荒岛生活" = "Island Life";
+"地图" = "Map";
+"旅行" = "Trips";
+"时间轴" = "Timeline";
+"常驻城市" = "Home City";
+"旅行列车" = "Travel Train";
+"查看今天的健康记录与目标" = "Today's health records and goals";
+"记录日常健康事项" = "Log everyday health events";
+"查看与记录每日饮水" = "View and log water intake";
+"与睡眠计时共享同一份睡眠记录" = "Shared records with Sleep Tracking";
+"查看与记录每日饮食" = "View and log meals";
+"查看与记录运动" = "View and log activity";
+"查看与记录体重" = "View and log weight";
+"回顾健康记录与趋势" = "Review health records and trends";
+"照料小岛，管理活力与物资" = "Care for your island and manage energy and supplies";
+"点亮走过的地方并查看照片" = "Explore visited places and photos";
+"整理旅行与足迹" = "Organize trips and places";
+"按时间回顾足迹" = "Review places over time";
+"管理常驻城市" = "Manage your home city";
+"规划列车线路，管理车厢与物资" = "Plan train routes and manage carriages and supplies";

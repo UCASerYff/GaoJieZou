@@ -4,7 +4,7 @@ struct IslandView: View {
     @EnvironmentObject var store: AppStore
     var body: some View {
         HStack {
-            SectionTitle(title:store.t("荒岛","Your island"),subtitle:store.t("没有终点，只有慢慢长成的家。","No finish line. Just a place that grows with you."))
+            SectionTitle(title:store.t("荒岛生活","Island life"),subtitle:store.t("没有终点，只有慢慢长成的家。","No finish line. Just a place that grows with you."))
             Spacer()
             if store.state.preferences.gameEnabled {
                 Button(store.state.island.paused ? store.t("结束休整","Resume island") : store.t("让岛屿休整","Rest island")) {
@@ -36,7 +36,7 @@ struct IslandView: View {
                     conversion(store.t("运动 → 活力","Activity"),ledger.activity,Double(18+max(0,island.buildingLevel("training")-1)*3),"bolt.fill",Theme.green)
                     conversion(store.t("睡眠 → 活力","Sleep"),ledger.sleepEnergy,24,"moon.stars.fill",Theme.purple)
                 }
-                Text(store.t("在搞健康或搞节奏记录睡眠后自动恢复活力：每小时 +3，每日最多 +24；最近 36 小时的记录可补领一次。","Sleep recorded in Health or Rhythm restores 3 energy per hour, up to 24 per day. Records from the last 36 hours can be claimed once.")).font(.caption).foregroundStyle(.secondary)
+                Text(store.t("在健康睡眠页或睡眠计时页记录后自动恢复活力：每小时 +3，每日最多 +24；最近 36 小时的记录可补领一次。","Sleep recorded in the health sleep page or sleep timer restores 3 energy per hour, up to 24 per day. Records from the last 36 hours can be claimed once.")).font(.caption).foregroundStyle(.secondary)
             }.card()
             LazyVGrid(columns:[GridItem(.adaptive(minimum:150),spacing:12)],spacing:12) {
                 ForEach(Catalog.materials,id:\.self) { key in

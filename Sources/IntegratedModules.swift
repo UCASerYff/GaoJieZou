@@ -22,17 +22,79 @@ struct IntegrationAvailability<Content: View>: View {
 }
 
 struct IntegratedHealthView: View {
+    let section: RhythmSection
     let route: URL?
     let routeRevision: Int
+    let onNavigate: (RhythmSection) -> Void
     var body: some View {
-        IntegrationAvailability { HealthModuleView(route: route, routeRevision: routeRevision) }
+        IntegrationAvailability {
+            HealthModuleView(page: section.healthPage ?? .overview, route: route, routeRevision: routeRevision,
+                             onNavigate: { onNavigate(RhythmSection(healthPage: $0)) })
+        }
     }
 }
 
 struct IntegratedFootprintsView: View {
+    let section: RhythmSection
     let route: URL?
     let routeRevision: Int
+    let onNavigate: (RhythmSection) -> Void
     var body: some View {
-        IntegrationAvailability { FootprintsModuleView(route: route, routeRevision: routeRevision) }
+        IntegrationAvailability {
+            FootprintsModuleView(page: section.footprintsPage ?? .map, route: route, routeRevision: routeRevision,
+                                 onNavigate: { onNavigate(RhythmSection(footprintsPage: $0)) })
+        }
+    }
+}
+
+extension RhythmSection {
+    var healthPage: HealthNavigationPage? {
+        switch self {
+        case .healthOverview: .overview
+        case .healthEvents: .events
+        case .healthWater: .water
+        case .healthSleep: .sleep
+        case .healthMeals: .meals
+        case .healthExercise: .exercise
+        case .healthWeight: .weight
+        case .healthTrends: .trends
+        case .healthIsland: .island
+        default: nil
+        }
+    }
+
+    init(healthPage: HealthNavigationPage) {
+        self = switch healthPage {
+        case .overview: .healthOverview
+        case .events: .healthEvents
+        case .water: .healthWater
+        case .sleep: .healthSleep
+        case .meals: .healthMeals
+        case .exercise: .healthExercise
+        case .weight: .healthWeight
+        case .trends: .healthTrends
+        case .island: .healthIsland
+        }
+    }
+
+    var footprintsPage: FootprintsNavigationPage? {
+        switch self {
+        case .footprintsMap: .map
+        case .footprintsTrips: .trips
+        case .footprintsTimeline: .timeline
+        case .footprintsResidentCity: .residentCity
+        case .footprintsTrain: .train
+        default: nil
+        }
+    }
+
+    init(footprintsPage: FootprintsNavigationPage) {
+        self = switch footprintsPage {
+        case .map: .footprintsMap
+        case .trips: .footprintsTrips
+        case .timeline: .footprintsTimeline
+        case .residentCity: .footprintsResidentCity
+        case .train: .footprintsTrain
+        }
     }
 }

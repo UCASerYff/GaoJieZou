@@ -6,7 +6,7 @@ struct SleepRecordsView: View {
     @State private var visibleCount = 30
     var body: some View {
         HStack(alignment:.bottom) {
-            SectionTitle(title:store.t("睡眠记录","Sleep records"),subtitle:store.t("在搞健康或搞节奏记一次，两边自动显示。","Record once in Health or Rhythm. Both apps stay in sync."))
+            SectionTitle(title:store.t("睡眠记录","Sleep records"),subtitle:store.t("在健康睡眠页或睡眠计时页记一次，共享同一份记录。","Record once in the health sleep page or sleep timer. Both pages share the same records."))
             Spacer()
             Button { store.syncSleepRewards() } label:{ Label(store.t("同步记录","Sync records"),systemImage:"arrow.triangle.2.circlepath") }
             Button { store.newSleep(backfill:true) } label:{ Label(store.t("补记","Backfill"),systemImage:"clock.arrow.circlepath") }
@@ -16,7 +16,7 @@ struct SleepRecordsView: View {
         VStack(alignment:.leading,spacing:10) {
             Label(store.t("睡眠也能恢复活力","Sleep restores energy, too"),systemImage:"moon.stars.fill").font(.headline).foregroundStyle(Theme.purple)
             Text(store.t("每小时恢复 3 点活力，每日最多 24 点。最近 36 小时内结束、时长 30 分钟至 24 小时的睡眠可领取一次；更早的记录仍会保留。岛屿暂停或关闭时不领奖，恢复后在有效期内自动补领。","Restore 3 energy per hour, up to 24 per day. Completed sleep of 30 minutes to 24 hours can be rewarded once within 36 hours. Older records are retained. Rewards wait while the island is paused or disabled.")).font(.callout).foregroundStyle(.secondary)
-            Text(store.t("同一台 Mac 上自动同步。搞节奏未运行时，下次打开会同步到历史记录和小组件；两边已获得的奖励不会重复发放。","Sync is local to this Mac. If Rhythm is closed, its history and widgets update when it next opens. Earned rewards are not granted twice.")).font(.caption).foregroundStyle(.secondary)
+            Text(store.t("同一份记录用于健康睡眠页、睡眠计时页和小组件。下次打开搞节奏时会刷新历史；已获得的奖励不会重复发放。","The health sleep page, sleep timer and widgets share these records. History refreshes when Gao Rhythm next opens. Earned rewards are not granted twice.")).font(.caption).foregroundStyle(.secondary)
         }.card()
         if let error = store.sleepSyncError {
             Label(error,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(Theme.orange).card()
@@ -26,7 +26,7 @@ struct SleepRecordsView: View {
         VStack(alignment:.leading,spacing:0) {
             HStack { Text(store.t("睡眠历史","Sleep history")).font(.headline); Spacer(); Text(store.t("共 \(store.sleepRecords.count) 条","\(store.sleepRecords.count) records")).font(.caption).foregroundStyle(.secondary) }.padding(.bottom,12)
             if store.sleepRecords.isEmpty {
-                EmptyCard(symbol:"moon.zzz.fill",title:store.t("记录一个安稳的夜晚","A place for your nights"),detail:store.t("填写睡眠小时、分钟并选择哪晚，也会自动显示在搞节奏中。","Enter sleep hours and minutes, then choose the night. It will appear in Rhythm automatically."))
+                EmptyCard(symbol:"moon.zzz.fill",title:store.t("记录一个安稳的夜晚","A place for your nights"),detail:store.t("填写睡眠小时、分钟并选择哪晚，健康睡眠页和睡眠计时页会共同显示。","Enter sleep hours and minutes, then choose the night. The health sleep page and sleep timer share the record."))
             }
             ForEach(Array(store.sleepRecords.prefix(visibleCount))) { record in
                 HStack(spacing:14) {
@@ -34,11 +34,11 @@ struct SleepRecordsView: View {
                     VStack(alignment:.leading,spacing:5) {
                         Text(record.endedAt.formatted(date:.abbreviated,time:.omitted)).font(.callout.weight(.medium))
                         Text(record.startedAt.formatted(date:.abbreviated,time:.shortened)+" → "+record.endedAt.formatted(date:.abbreviated,time:.shortened)).font(.caption).foregroundStyle(.secondary)
-                        Text(record.origin == "health" ? store.t("来自搞健康","From Health") : store.t("来自搞节奏","From Rhythm")).font(.caption2).foregroundStyle(.tertiary)
+                        Text(record.origin == "health" ? store.t("来自健康记录","From the health page") : store.t("来自睡眠计时","From the sleep timer")).font(.caption2).foregroundStyle(.tertiary)
                     }
                     Spacer()
                     Text(sleepDuration(record.durationSeconds,en:store.en)).font(.title3.monospacedDigit().weight(.semibold))
-                    Button(role:.destructive) { deletion = record } label:{ Image(systemName:"trash") }.buttonStyle(.borderless).help(store.t("从两边删除这条记录","Delete this record from both apps"))
+                    Button(role:.destructive) { deletion = record } label:{ Image(systemName:"trash") }.buttonStyle(.borderless).help(store.t("删除这条共享睡眠记录","Delete this shared sleep record"))
                 }.padding(.vertical,12)
                 Divider()
             }
@@ -48,8 +48,8 @@ struct SleepRecordsView: View {
         }.card()
         .alert(store.t("删除这条睡眠记录？","Delete this sleep record?"),isPresented:Binding(get:{ deletion != nil },set:{ if !$0 { deletion = nil } })) {
             Button(store.t("取消","Cancel"),role:.cancel) { deletion = nil }
-            Button(store.t("从两边删除","Delete from both"),role:.destructive) { if let deletion { store.removeSleep(deletion) }; deletion = nil }
-        } message:{ Text(store.t("搞健康与搞节奏会同步删除这条记录，已获得的游戏奖励不会回退。","This removes the record from Health and Rhythm. Earned game rewards are retained.")) }
+            Button(store.t("删除共享记录","Delete shared record"),role:.destructive) { if let deletion { store.removeSleep(deletion) }; deletion = nil }
+        } message:{ Text(store.t("健康睡眠页与睡眠计时页会共同移除这条记录，已获得的游戏奖励不会回退。","This removes the record from the health sleep page and sleep timer. Earned game rewards are retained.")) }
     }
 }
 
@@ -61,7 +61,7 @@ struct SleepSummaryCard: View {
             SymbolTile(symbol:"moon.stars.fill",color:Theme.purple)
             VStack(alignment:.leading,spacing:4) {
                 Text(store.t("今日睡眠","Today's sleep")).font(.headline)
-                Text(store.t("按起床日期统计 · 与搞节奏共享记录","Grouped by wake-up date · Shared with Rhythm")).font(.caption).foregroundStyle(.secondary)
+                Text(store.t("按起床日期统计 · 与睡眠计时页共享记录","Grouped by wake-up date · Shared with the sleep timer")).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             Text(today.isEmpty ? "—" : sleepDuration(today.reduce(0) { $0+$1.durationSeconds },en:store.en)).font(.title2.monospacedDigit().weight(.semibold))
@@ -83,7 +83,7 @@ struct SleepRecordEditor: View {
     var body: some View {
         VStack(alignment:.leading,spacing:20) {
             Label(store.t(store.sleepBackfill ? "补记睡眠" : "记录睡眠",store.sleepBackfill ? "Backfill sleep" : "Record sleep"),systemImage:"moon.stars.fill").font(.title2.weight(.semibold)).foregroundStyle(Theme.purple)
-            Text(store.t("和搞节奏一样，填写睡了几小时几分钟，两边只需记录一次。","Enter hours and minutes, just like Rhythm. Record once for both apps.")).foregroundStyle(.secondary)
+            Text(store.t("填写睡了几小时几分钟，健康睡眠页与睡眠计时页只需记录一次。","Enter hours and minutes once for the health sleep page and sleep timer.")).foregroundStyle(.secondary)
             HStack(spacing:10) {
                 Text(store.t("睡眠时长","Sleep duration"))
                 Spacer()
@@ -103,7 +103,7 @@ struct SleepRecordEditor: View {
             } else {
                 Text(store.t("小时为 0–24，分钟为 0–59，总时长为 30 分钟至 24 小时。","Enter 0–24 hours and 0–59 minutes, totaling 30 minutes to 24 hours.")).font(.callout).foregroundStyle(Theme.orange)
             }
-            Text(store.t("起床时间按次日早上 7:00 固定换算；选择昨天或更早的日期即可补记。搞节奏按所选那晚统计，搞健康的今日睡眠按起床日期统计。","Wake-up is set to 07:00 the next day. Choose yesterday or an earlier date to backfill. Rhythm groups by the selected night; Health's daily sleep card groups by wake-up date.")).font(.caption).foregroundStyle(.secondary)
+            Text(store.t("起床时间按次日早上 7:00 固定换算；选择昨天或更早的日期即可补记。睡眠计时页按所选那晚统计，健康页的今日睡眠按起床日期统计。","Wake-up is set to 07:00 the next day. Choose yesterday or an earlier date to backfill. The sleep timer groups by the selected night; the health daily card groups by wake-up date.")).font(.caption).foregroundStyle(.secondary)
             Text(store.t("保存后自动同步。近期有效睡眠按每小时 3 点恢复岛屿活力，每日最多 24 点。","Automatically syncs on save. Recent eligible sleep restores 3 island energy per hour, up to 24 per day.")).font(.caption).foregroundStyle(.secondary)
             HStack { Spacer(); Button(store.t("取消","Cancel")) { dismiss() }.keyboardShortcut(.cancelAction); Button(store.t("保存并同步","Save and sync")) { _ = store.addSleep(start:interval.start,end:interval.end) }.buttonStyle(.borderedProminent).tint(Theme.purple).disabled(!valid).keyboardShortcut(.defaultAction) }
         }.padding(28).frame(width:540)

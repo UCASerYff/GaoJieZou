@@ -1,5 +1,27 @@
 import SwiftUI
 
+/// The former sidebar entry is a first-level page in the shared host sidebar.
+/// Editing stays in a sheet so Cancel/Save dismiss only that editor.
+struct ResidentCityPage: View {
+    @EnvironmentObject var store: Store
+    @State private var showEditor = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 22) {
+                Heading(title: tF("常驻城市", "Home City"),
+                        subtitle: tF("给日常生活留一个坐标。", "A place for everyday life on your map."))
+                ResidentCitySummary { showEditor = true }
+                Text(tF("常驻标记不增加到访次数、旅行统计或列车奖励；已有足迹始终保留。",
+                        "The home marker does not add visits, travel statistics or train rewards; existing footprints are kept."))
+                    .font(.callout).foregroundStyle(.secondary)
+            }.padding(28).frame(maxWidth: 900, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .sheet(isPresented: $showEditor) { ResidentCityEditor().environmentObject(store) }
+    }
+}
+
 struct ResidentCitySummary: View {
     @EnvironmentObject var store: Store
     let edit: () -> Void

@@ -3,7 +3,8 @@ import Combine
 import Foundation
 
 /// The app keeps its own complete archive. Only completed sleep records use the
-/// shared journal; neither app writes the other app's library or game state.
+/// shared journal; health and sleep pages share records while retaining each
+/// module's existing settlement markers and game state.
 @MainActor
 final class RhythmSleepSync {
     private var subscriptions: Set<AnyCancellable> = []
