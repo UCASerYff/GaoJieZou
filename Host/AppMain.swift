@@ -115,10 +115,15 @@ private struct MainWindowContent: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("appOpenSettings"))) { _ in openSettings() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Standalone.showWindow"))) { _ in showMainWindow() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("Standalone.consumeIntegratedURL"))) { _ in consumeIntegratedAction() }
+            // Reuse the open main scene for incoming links. The scene-level
+            // matching modifier only selects a scene to create on a cold open.
+            .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
             .onOpenURL { url in
                 route = integratedURL(url)
                 revision = delegate.nextIntegratedRouteRevision()
-                showMainWindow()
+                // SwiftUI has already selected the receiving scene. Opening
+                // main again here can foreground another scene with stale state.
+                NSApp.activate(ignoringOtherApps: true)
             }
     }
 
