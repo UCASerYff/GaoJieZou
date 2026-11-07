@@ -105,19 +105,69 @@ ACL_EXTENDED_ALLOW = 1
 ACL_READ_DATA = 1 << 1
 
 
-def acl_text_is_synthetic_everyone_read(text):
-    """True only for a non-empty everyone-allow-read entry without write or delete."""
-    if not isinstance(text, (bytes, str)) or not text:
-        return False
-    lowered = text.decode("utf-8", "replace").lower() if isinstance(text, bytes) else text.lower()
-    if EVERYONE_UUID_TEXT.lower() not in lowered and "everyone" not in lowered:
-        return False
-    if "allow" not in lowered or "read" not in lowered:
-        return False
-    for forbidden in ("write", "delete", "append", "chown"):
-        if forbidden in lowered:
-            return False
-    return True
+ACL_FIRST_ENTRY = 0
+ACL_NEXT_ENTRY = -1  # Darwin. FreeBSD uses 1; this probe is Darwin-only.
+PERM_BITS = {
+    1 << 1: "read_data",
+    1 << 2: "write_data",
+    1 << 3: "execute",
+    1 << 4: "delete",
+    1 << 5: "append_data",
+    1 << 6: "delete_child",
+    1 << 7: "read_attributes",
+    1 << 8: "write_attributes",
+    1 << 9: "read_extattributes",
+    1 << 10: "write_extattributes",
+    1 << 11: "read_security",
+    1 << 12: "write_security",
+    1 << 13: "change_owner",
+    1 << 14: "synchronize",
+}
+FORBIDDEN_PERMS = frozenset({
+    "write_data", "delete", "append_data", "delete_child", "write_attributes",
+    "write_extattributes", "write_security", "change_owner",
+})
+
+
+def qualifier_class(raw):
+    """Classify a 16-byte qualifier without retaining any other identity."""
+    if raw is None:
+        return "absent"
+    if raw == EVERYONE_UUID:
+        return "everyone"
+    return "other"
+
+
+def perm_names(bits):
+    names = [name for bit, name in sorted(PERM_BITS.items()) if bits & bit]
+    if bits & ~sum(PERM_BITS):
+        names.append("unknown")
+    return tuple(names)
+
+
+def synthetic_acl_verdict(entries):
+    """Exactly one everyone-allow ACE whose only permission is read_data.
+
+    A display string that merely contains everyone and read is not accepted.
+    """
+    diagnostic = {"entryCount": len(entries), "stage": "verdict", "readApi": "acl_get_entry"}
+    if len(entries) != 1:
+        diagnostic["stage"] = "entry_count"
+        return "UNVERIFIED", diagnostic
+    entry = entries[0]
+    perms = tuple(entry.get("perms") or ())
+    diagnostic.update(tag=entry.get("tag"), qualifierClass=entry.get("qualifierClass"), perms=list(perms))
+    if entry.get("tag") != "allow":
+        diagnostic["stage"] = "tag"
+        return "UNVERIFIED", diagnostic
+    if entry.get("qualifierClass") != "everyone":
+        diagnostic["stage"] = "qualifier"
+        return "UNVERIFIED", diagnostic
+    if frozenset(perms) & FORBIDDEN_PERMS or set(perms) != {"read_data"}:
+        diagnostic["stage"] = "perms"
+        diagnostic["forbiddenPermPresent"] = bool(frozenset(perms) & FORBIDDEN_PERMS)
+        return "UNVERIFIED", diagnostic
+    return "PASS", diagnostic
 
 
 def _darwin_xattr():
@@ -179,7 +229,8 @@ def probe_flags(archive, restore):
 def _bind_acl(lib):
     names = ("acl_init", "acl_create_entry", "acl_set_tag_type", "acl_set_qualifier",
              "acl_get_permset", "acl_add_perm", "acl_set_file", "acl_get_file",
-             "acl_to_text", "acl_free")
+             "acl_get_entry", "acl_get_tag_type", "acl_get_qualifier", "acl_get_perm_np",
+             "acl_free")
     if any(not hasattr(lib, name) for name in names):
         return False
     lib.acl_init.argtypes = [ctypes.c_int]
@@ -198,8 +249,14 @@ def _bind_acl(lib):
     lib.acl_set_file.restype = ctypes.c_int
     lib.acl_get_file.argtypes = [ctypes.c_char_p, ctypes.c_int]
     lib.acl_get_file.restype = ctypes.c_void_p
-    lib.acl_to_text.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-    lib.acl_to_text.restype = ctypes.c_void_p
+    lib.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
+    lib.acl_get_entry.restype = ctypes.c_int
+    lib.acl_get_tag_type.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+    lib.acl_get_tag_type.restype = ctypes.c_int
+    lib.acl_get_qualifier.argtypes = [ctypes.c_void_p]
+    lib.acl_get_qualifier.restype = ctypes.c_void_p
+    lib.acl_get_perm_np.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    lib.acl_get_perm_np.restype = ctypes.c_int
     lib.acl_free.argtypes = [ctypes.c_void_p]
     lib.acl_free.restype = ctypes.c_int
     return True
@@ -227,44 +284,87 @@ def _synthetic_everyone_read_acl(lib):
     return slot.value
 
 
-def _acl_text(lib, path):
+def _entry_record(lib, entry):
+    tag = ctypes.c_uint()
+    if lib.acl_get_tag_type(entry, ctypes.byref(tag)) != 0:
+        return {"tag": "unreadable", "qualifierClass": "unreadable", "perms": ()}
+    tag_name = {ACL_EXTENDED_ALLOW: "allow", 2: "deny"}.get(tag.value, "other")
+    qualifier = lib.acl_get_qualifier(entry)
+    raw = None
+    if qualifier:
+        try:
+            raw = ctypes.string_at(qualifier, 16)
+        finally:
+            lib.acl_free(qualifier)
+    permset = ctypes.c_void_p()
+    names = []
+    if lib.acl_get_permset(entry, ctypes.byref(permset)) == 0:
+        for bit, name in sorted(PERM_BITS.items()):
+            present = lib.acl_get_perm_np(permset, bit)
+            if present == 1:
+                names.append(name)
+            elif present < 0:
+                names.append("unreadable")
+    return {"tag": tag_name, "qualifierClass": qualifier_class(raw), "perms": tuple(names)}
+
+
+def read_acl_entries(lib, path):
+    """Structured ACE list. Qualifiers other than everyone are not retained."""
+    diagnostic = {"stage": "get_file", "readApi": "acl_get_entry", "errno": None}
     handle = lib.acl_get_file(os.fsencode(path), ACL_TYPE_EXTENDED)
     if not handle:
-        return None
-    raw = lib.acl_to_text(handle, None)
-    if not raw:
-        lib.acl_free(handle)
-        return None
+        diagnostic["errno"] = ctypes.get_errno()
+        diagnostic["entryCount"] = 0
+        return [], diagnostic
+    entries = []
+    entry = ctypes.c_void_p()
+    entry_id = ACL_FIRST_ENTRY
     try:
-        return ctypes.cast(raw, ctypes.c_char_p).value
+        while len(entries) < 8:
+            result = lib.acl_get_entry(handle, entry_id, ctypes.byref(entry))
+            if result != 0:
+                diagnostic["nextResult"] = result
+                break
+            entries.append(_entry_record(lib, entry))
+            entry_id = ACL_NEXT_ENTRY
+        else:
+            diagnostic["stage"] = "entry_limit"
     finally:
-        lib.acl_free(raw)
         lib.acl_free(handle)
+        diagnostic["entryCount"] = len(entries)
+    if diagnostic.get("stage") != "entry_limit":
+        diagnostic["stage"] = "read"
+    return entries, diagnostic
 
 
 def probe_acl(archive, restore):
-    """Non-empty everyone-read sample. An empty acl_init is not a pass."""
+    """Capability check for one synthetic everyone-read ACE. Not archive fidelity."""
     if sys.platform != "darwin":
-        return "SKIP"
+        return "SKIP", {"stage": "platform", "readApi": "none"}
     try:
         lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     except OSError:
-        return "SKIP"
+        return "SKIP", {"stage": "libsystem", "readApi": "none"}
     if not _bind_acl(lib):
-        return "SKIP"
+        return "SKIP", {"stage": "symbols", "readApi": "acl_get_entry"}
     try:
         acl = _synthetic_everyone_read_acl(lib)
         if acl is None:
-            return "UNVERIFIED"
-        for path in (archive, restore):
+            return "UNVERIFIED", {"stage": "create_entry", "readApi": "acl_get_entry"}
+        for label, path in (("archive", archive), ("restore", restore)):
             if lib.acl_set_file(os.fsencode(path), ACL_TYPE_EXTENDED, acl) != 0:
-                return "UNVERIFIED"
-        left, right = _acl_text(lib, archive), _acl_text(lib, restore)
+                return "UNVERIFIED", {"stage": "set_file", "which": label, "errno": ctypes.get_errno(),
+                                      "readApi": "acl_get_entry"}
+        left, left_diag = read_acl_entries(lib, archive)
+        right, right_diag = read_acl_entries(lib, restore)
     except (OSError, AttributeError):
-        return "UNVERIFIED"
-    if not acl_text_is_synthetic_everyone_read(left) or left != right:
-        return "UNVERIFIED"
-    return "PASS"
+        return "UNVERIFIED", {"stage": "exception", "readApi": "acl_get_entry"}
+    status, diagnostic = synthetic_acl_verdict(left)
+    diagnostic["restoreEntryCount"] = right_diag.get("entryCount")
+    if left != right:
+        diagnostic["stage"] = "archive_restore_mismatch"
+        return "UNVERIFIED", diagnostic
+    return status, diagnostic
 
 
 def run_in(created):
@@ -276,11 +376,13 @@ def run_in(created):
     archive = archive_dir / "sample.bin"
     restore = restore_dir / "sample.bin"
     archive.write_bytes(b"synthetic-metadata-not-user-data")
+    acl_status, acl_diagnostic = probe_acl(archive, restore)
     results = {
         "mode": probe_mode(archive, restore),
         "quarantine": probe_quarantine(archive, restore),
         "bsdFlags": probe_flags(archive, restore),
-        "acl": probe_acl(archive, restore),
+        "acl": acl_status,
+        "aclDiagnostic": acl_diagnostic,
     }
     for name in CAPABILITIES:
         if results[name] not in ("PASS", "SKIP", "UNVERIFIED"):

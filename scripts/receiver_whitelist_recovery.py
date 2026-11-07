@@ -723,8 +723,22 @@ def copy_bsd_flags(source, target):
     return "PRESERVED" if readback == flags else "UNVERIFIED"
 
 
+def acl_structure_equal(left, right):
+    """Exact ACE equality. This does not special-case the everyone sample."""
+    if not isinstance(left, list) or not isinstance(right, list) or len(left) != len(right):
+        return False
+    for first, second in zip(left, right):
+        if first.get("tag") != second.get("tag"):
+            return False
+        if first.get("qualifier") != second.get("qualifier"):
+            return False
+        if tuple(first.get("perms") or ()) != tuple(second.get("perms") or ()):
+            return False
+    return True
+
+
 def copy_acl(source, target):
-    """Copy an existing ACL. Absence is ABSENT, not a fidelity pass."""
+    """Copy an existing ACL byte-for-structure. Absence is not a fidelity pass."""
     if sys.platform != "darwin":
         return "UNVERIFIED"
     try:
@@ -733,33 +747,65 @@ def copy_acl(source, target):
         lib.acl_get_file.restype = ctypes.c_void_p
         lib.acl_set_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p]
         lib.acl_set_file.restype = ctypes.c_int
-        lib.acl_to_text.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
-        lib.acl_to_text.restype = ctypes.c_void_p
+        lib.acl_get_entry.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_void_p)]
+        lib.acl_get_entry.restype = ctypes.c_int
+        lib.acl_get_tag_type.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint)]
+        lib.acl_get_tag_type.restype = ctypes.c_int
+        lib.acl_get_qualifier.argtypes = [ctypes.c_void_p]
+        lib.acl_get_qualifier.restype = ctypes.c_void_p
+        lib.acl_get_permset.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        lib.acl_get_permset.restype = ctypes.c_int
+        lib.acl_get_perm_np.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        lib.acl_get_perm_np.restype = ctypes.c_int
         lib.acl_free.argtypes = [ctypes.c_void_p]
         lib.acl_free.restype = ctypes.c_int
     except OSError:
         return "UNVERIFIED"
+    if not hasattr(lib, "acl_get_entry"):
+        return "UNVERIFIED"
 
-    def text_of(path):
+    def entries_of(path):
         handle = lib.acl_get_file(os.fsencode(path), 0x80)
         if not handle:
-            return b""
-        raw = lib.acl_to_text(handle, None)
+            return None if ctypes.get_errno() not in (getattr(errno, "ENOENT", 2), getattr(errno, "ENOATTR", 93)) else []
+        found = []
+        entry = ctypes.c_void_p()
+        entry_id = 0
         try:
-            return b"" if not raw else ctypes.cast(raw, ctypes.c_char_p).value or b""
+            while len(found) < 64:
+                if lib.acl_get_entry(handle, entry_id, ctypes.byref(entry)) != 0:
+                    break
+                tag = ctypes.c_uint()
+                lib.acl_get_tag_type(entry, ctypes.byref(tag))
+                qualifier = lib.acl_get_qualifier(entry)
+                raw = b""
+                if qualifier:
+                    try:
+                        raw = ctypes.string_at(qualifier, 16)
+                    finally:
+                        lib.acl_free(qualifier)
+                permset = ctypes.c_void_p()
+                bits = []
+                if lib.acl_get_permset(entry, ctypes.byref(permset)) == 0:
+                    for bit in range(1, 15):
+                        if lib.acl_get_perm_np(permset, 1 << bit) == 1:
+                            bits.append(1 << bit)
+                found.append({"tag": tag.value, "qualifier": raw, "perms": tuple(bits)})
+                entry_id = -1
         finally:
-            if raw:
-                lib.acl_free(raw)
             lib.acl_free(handle)
+        return found
 
-    source_text = text_of(source)
-    if not source_text:
+    source_entries = entries_of(source)
+    if source_entries is None:
+        return "UNVERIFIED"
+    if not source_entries:
         return "ABSENT"
     handle = lib.acl_get_file(os.fsencode(source), 0x80)
     if not handle or lib.acl_set_file(os.fsencode(target), 0x80, handle) != 0:
         fail("metadata_not_preserved", "acl")
     lib.acl_free(handle)
-    if text_of(target) != source_text:
+    if not acl_structure_equal(source_entries, entries_of(target)):
         fail("metadata_not_preserved", "acl")
     return "PRESERVED"
 

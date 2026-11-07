@@ -677,10 +677,31 @@ class StandaloneProbeTests(unittest.TestCase):
             target.mkdir()
             link.symlink_to(target)
             self.assertEqual(probe.validate_roots(str(link), str(house)), "symlink_path_refused")
-            self.assertFalse(probe.acl_text_is_synthetic_everyone_read(b""))
-            self.assertFalse(probe.acl_text_is_synthetic_everyone_read("everyone allow read write"))
-            self.assertTrue(probe.acl_text_is_synthetic_everyone_read(
-                "ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C:everyone:allow:read"))
+            everyone = {"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data",)}
+            status, diagnostic = probe.synthetic_acl_verdict([everyone])
+            self.assertEqual(status, "PASS")
+            self.assertEqual(diagnostic["qualifierClass"], "everyone")
+            for bad in (
+                [],
+                [everyone, everyone],
+                [{"tag": "allow", "qualifierClass": "other", "perms": ("read_data",)}],
+                [{"tag": "deny", "qualifierClass": "everyone", "perms": ("read_data",)}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "write_data")}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "append_data")}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "delete")}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "change_owner")}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_attributes",)}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ()}],
+            ):
+                self.assertEqual(probe.synthetic_acl_verdict(bad)[0], "UNVERIFIED")
+            self.assertEqual(probe.qualifier_class(probe.EVERYONE_UUID), "everyone")
+            self.assertEqual(probe.qualifier_class(b"\x11" * 16), "other")
+            user = b"\x22" * 16
+            left = [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2,)}]
+            self.assertTrue(tool.acl_structure_equal(left, [dict(item) for item in left]))
+            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": user, "perms": (2,)}]))
+            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2, 4)}]))
+            self.assertFalse(tool.acl_structure_equal(left, []))
         finally:
             work.cleanup()
 
