@@ -630,6 +630,16 @@ class RecoveryTests(unittest.TestCase):
                                  self.world.plan_path, live_output, self._gate(live_output), home=home)
         self.assertEqual(refused.exception.code, "live_data_root_refused")
         self.assertFalse(live_output.exists())
+        tool._FORCE_XATTR_BACKEND = "missing"
+        try:
+            with self.assertRaises(tool.RecoveryError) as missing_backend:
+                tool.capture_package(self.world.group, self.world.support, self.world.preferences,
+                                     self.world.plan_path, self.base / "no-backend.noindex",
+                                     self._gate(self.base / "no-backend.noindex"))
+            self.assertEqual(missing_backend.exception.code, "metadata_backend_unavailable")
+        finally:
+            tool._FORCE_XATTR_BACKEND = None
+        self.assertFalse((self.base / "no-backend.noindex").exists())
 
 
 class StandaloneProbeTests(unittest.TestCase):
@@ -638,6 +648,10 @@ class StandaloneProbeTests(unittest.TestCase):
         source = script.read_text()
         self.assertNotIn("receiver_whitelist_recovery", source)
         self.assertNotIn("test_receiver_whitelist_recovery", source)
+        self.assertIn("XATTR_NOFOLLOW", source)
+        self.assertIn("acl_create_entry", source)
+        self.assertIn("ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C", source)
+        self.assertNotIn("os.setxattr", source)
         probe = load("standalone_metadata_probe", script)
         parent = Path(tempfile.gettempdir())
         before = set(parent.glob("rhythm-macos-probe-*.noindex"))
@@ -663,6 +677,10 @@ class StandaloneProbeTests(unittest.TestCase):
             target.mkdir()
             link.symlink_to(target)
             self.assertEqual(probe.validate_roots(str(link), str(house)), "symlink_path_refused")
+            self.assertFalse(probe.acl_text_is_synthetic_everyone_read(b""))
+            self.assertFalse(probe.acl_text_is_synthetic_everyone_read("everyone allow read write"))
+            self.assertTrue(probe.acl_text_is_synthetic_everyone_read(
+                "ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C:everyone:allow:read"))
         finally:
             work.cleanup()
 

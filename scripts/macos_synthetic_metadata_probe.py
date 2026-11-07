@@ -92,15 +92,71 @@ def probe_mode(archive, restore):
     return "PASS" if left == right == 0o640 else "UNVERIFIED"
 
 
-def probe_quarantine(archive, restore):
-    if not hasattr(os, "setxattr") or not hasattr(os, "getxattr"):
-        return "SKIP"
-    name = "com.apple.quarantine"
+# Darwin getxattr/setxattr take a position argument. The os module helpers are a different ABI.
+XATTR_NOFOLLOW = 0x0001
+# Apple's well-known everyone UUID. It is not a user account.
+EVERYONE_UUID_TEXT = "ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C"
+EVERYONE_UUID = bytes((
+    0xAB, 0xCD, 0xEF, 0xAB, 0xCD, 0xEF, 0xAB, 0xCD,
+    0xEF, 0xAB, 0xCD, 0xEF, 0x00, 0x00, 0x00, 0x0C,
+))
+ACL_TYPE_EXTENDED = 0x80
+ACL_EXTENDED_ALLOW = 1
+ACL_READ_DATA = 1 << 1
+
+
+def acl_text_is_synthetic_everyone_read(text):
+    """True only for a non-empty everyone-allow-read entry without write or delete."""
+    if not isinstance(text, (bytes, str)) or not text:
+        return False
+    lowered = text.decode("utf-8", "replace").lower() if isinstance(text, bytes) else text.lower()
+    if EVERYONE_UUID_TEXT.lower() not in lowered and "everyone" not in lowered:
+        return False
+    if "allow" not in lowered or "read" not in lowered:
+        return False
+    for forbidden in ("write", "delete", "append", "chown"):
+        if forbidden in lowered:
+            return False
+    return True
+
+
+def _darwin_xattr():
+    if sys.platform != "darwin":
+        return None
     try:
-        os.setxattr(archive, name, SYNTHETIC_QUARANTINE, follow_symlinks=False)
-        os.setxattr(restore, name, SYNTHETIC_QUARANTINE, follow_symlinks=False)
-        left = os.getxattr(archive, name, follow_symlinks=False)
-        right = os.getxattr(restore, name, follow_symlinks=False)
+        lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    except OSError:
+        return None
+    lib.setxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+                             ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    lib.setxattr.restype = ctypes.c_int
+    lib.getxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+                             ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    lib.getxattr.restype = ctypes.c_ssize_t
+    return lib
+
+
+def _xattr_roundtrip(lib, path, name, value):
+    raw = ctypes.create_string_buffer(value)
+    if lib.setxattr(os.fsencode(path), name.encode(), raw, len(value), 0, XATTR_NOFOLLOW) != 0:
+        return None
+    size = lib.getxattr(os.fsencode(path), name.encode(), None, 0, 0, XATTR_NOFOLLOW)
+    if size < 0 or size != len(value):
+        return None
+    buf = ctypes.create_string_buffer(size)
+    if lib.getxattr(os.fsencode(path), name.encode(), buf, size, 0, XATTR_NOFOLLOW) != size:
+        return None
+    return buf.raw[:size]
+
+
+def probe_quarantine(archive, restore):
+    """Capability check only. The os module xattr helpers are not used."""
+    lib = _darwin_xattr()
+    if lib is None:
+        return "SKIP"
+    try:
+        left = _xattr_roundtrip(lib, archive, "com.apple.quarantine", SYNTHETIC_QUARANTINE)
+        right = _xattr_roundtrip(lib, restore, "com.apple.quarantine", SYNTHETIC_QUARANTINE)
     except OSError:
         return "UNVERIFIED"
     return "PASS" if left == right == SYNTHETIC_QUARANTINE else "UNVERIFIED"
@@ -120,37 +176,95 @@ def probe_flags(archive, restore):
     return "PASS" if left == right == flag else "UNVERIFIED"
 
 
+def _bind_acl(lib):
+    names = ("acl_init", "acl_create_entry", "acl_set_tag_type", "acl_set_qualifier",
+             "acl_get_permset", "acl_add_perm", "acl_set_file", "acl_get_file",
+             "acl_to_text", "acl_free")
+    if any(not hasattr(lib, name) for name in names):
+        return False
+    lib.acl_init.argtypes = [ctypes.c_int]
+    lib.acl_init.restype = ctypes.c_void_p
+    lib.acl_create_entry.argtypes = [ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(ctypes.c_void_p)]
+    lib.acl_create_entry.restype = ctypes.c_int
+    lib.acl_set_tag_type.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    lib.acl_set_tag_type.restype = ctypes.c_int
+    lib.acl_set_qualifier.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.acl_set_qualifier.restype = ctypes.c_int
+    lib.acl_get_permset.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    lib.acl_get_permset.restype = ctypes.c_int
+    lib.acl_add_perm.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    lib.acl_add_perm.restype = ctypes.c_int
+    lib.acl_set_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p]
+    lib.acl_set_file.restype = ctypes.c_int
+    lib.acl_get_file.argtypes = [ctypes.c_char_p, ctypes.c_int]
+    lib.acl_get_file.restype = ctypes.c_void_p
+    lib.acl_to_text.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    lib.acl_to_text.restype = ctypes.c_void_p
+    lib.acl_free.argtypes = [ctypes.c_void_p]
+    lib.acl_free.restype = ctypes.c_int
+    return True
+
+
+def _synthetic_everyone_read_acl(lib):
+    """everyone allow read. No write, delete, append, or owner change."""
+    acl = lib.acl_init(1)
+    if not acl:
+        return None
+    slot = ctypes.c_void_p(acl)
+    entry = ctypes.c_void_p()
+    if lib.acl_create_entry(ctypes.byref(slot), ctypes.byref(entry)) != 0:
+        return None
+    if lib.acl_set_tag_type(entry, ACL_EXTENDED_ALLOW) != 0:
+        return None
+    qualifier = ctypes.create_string_buffer(EVERYONE_UUID)
+    if lib.acl_set_qualifier(entry, qualifier) != 0:
+        return None
+    permset = ctypes.c_void_p()
+    if lib.acl_get_permset(entry, ctypes.byref(permset)) != 0:
+        return None
+    if lib.acl_add_perm(permset, ACL_READ_DATA) != 0:
+        return None
+    return slot.value
+
+
+def _acl_text(lib, path):
+    handle = lib.acl_get_file(os.fsencode(path), ACL_TYPE_EXTENDED)
+    if not handle:
+        return None
+    raw = lib.acl_to_text(handle, None)
+    if not raw:
+        lib.acl_free(handle)
+        return None
+    try:
+        return ctypes.cast(raw, ctypes.c_char_p).value
+    finally:
+        lib.acl_free(raw)
+        lib.acl_free(handle)
+
+
 def probe_acl(archive, restore):
+    """Non-empty everyone-read sample. An empty acl_init is not a pass."""
     if sys.platform != "darwin":
         return "SKIP"
     try:
         lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     except OSError:
         return "SKIP"
-    for symbol in ("acl_init", "acl_set_file", "acl_get_file", "acl_to_text", "acl_free"):
-        if not hasattr(lib, symbol):
-            return "SKIP"
+    if not _bind_acl(lib):
+        return "SKIP"
     try:
-        lib.acl_init.restype = ctypes.c_void_p
-        lib.acl_set_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p]
-        lib.acl_get_file.restype = ctypes.c_void_p
-        lib.acl_to_text.restype = ctypes.c_void_p
-        created = lib.acl_init(1)
-        if not created:
+        acl = _synthetic_everyone_read_acl(lib)
+        if acl is None:
             return "UNVERIFIED"
-        # ACL_TYPE_EXTENDED on Darwin is 0x80. A failed call is not a pass.
         for path in (archive, restore):
-            if lib.acl_set_file(os.fsencode(path), 0x80, created) != 0:
+            if lib.acl_set_file(os.fsencode(path), ACL_TYPE_EXTENDED, acl) != 0:
                 return "UNVERIFIED"
-        texts = []
-        for path in (archive, restore):
-            handle = lib.acl_get_file(os.fsencode(path), 0x80)
-            if not handle:
-                return "UNVERIFIED"
-            texts.append(ctypes.cast(lib.acl_to_text(handle, None), ctypes.c_char_p).value)
-        return "PASS" if texts[0] == texts[1] and texts[0] is not None else "UNVERIFIED"
+        left, right = _acl_text(lib, archive), _acl_text(lib, restore)
     except (OSError, AttributeError):
         return "UNVERIFIED"
+    if not acl_text_is_synthetic_everyone_read(left) or left != right:
+        return "UNVERIFIED"
+    return "PASS"
 
 
 def run_in(created):

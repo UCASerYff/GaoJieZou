@@ -98,7 +98,7 @@ python3 scripts/receiver_whitelist_recovery.py verify \
 
 外部维护门控是一份 JSON，不是 `--confirmed` 字符串。它必须正好包含仓库里可见的 8 个 bundle id，`rootLockIntegrated` 必须为 false，时间窗必须覆盖当前时刻，路径必须与本次参数逐字一致。工具不检查进程是否已退出，因此 `rootMaintenanceEvidence` 保持 null，`productionReady` 为 false。真正的 Root 锁集成仍然缺着。
 
-BSD flags 和 ACL 在本实现里是 `UNVERIFIED`，不能写成 PASS。没有读回 `com.apple.quarantine` 时也是 `UNVERIFIED`。`actualArchiveToRestoreMetadataExact` 保持 null。当前 readers、游戏进度、防重和 runtime-only 仍是 `UNVERIFIED`。
+归档到恢复的保真由捕获工具自己完成，不借用探针的 PASS。Darwin 上用 libSystem 的 6 参数 `setxattr`/`getxattr`（`XATTR_NOFOLLOW`），不依赖 `os.setxattr`。源上已有的 quarantine、flags 或 ACL 若无法原样写到目标并读回，捕获失败，而不是静默丢掉。flags 只写目标，不改源，读回缺位即 `flags_lowered_or_not_preserved`。Linux 没有这些 Darwin 接口时，捕获收据保持 `UNVERIFIED`，`productionReady` 仍是 false，不能当成 PASS。`actualArchiveToRestoreMetadataExact` 保持 null。当前 readers、游戏进度和防重仍是 `UNVERIFIED`。
 
 ## 实现与未实现
 
@@ -112,7 +112,9 @@ BSD flags 和 ACL 在本实现里是 `UNVERIFIED`，不能写成 PASS。没有�
 | 外部维护门控 | 已实现为可审核声明，不是进程证明 |
 | Root 锁集成 / 写者已暂停 | 未实现，`rootMaintenanceEvidence` 为 null |
 | productionReady | 未放开，固定 false |
-| ACL / BSD flags 保真 | 未实现，UNVERIFIED，阻断 READY |
+| Darwin Q/flags/ACL 复制到归档和隔离恢复 | 已实现复制路径；源上有而读回不一致则失败 |
+| Linux 上的 Q/flags/ACL 生产结论 | 未实现，保持 UNVERIFIED，阻断 READY |
+| 独立探针的 PASS | 只表示探针自己的合成样本，不是工具保真 |
 | 隔离恢复 | 已实现，仍不能写 Active |
 | 当前 readers、游戏、防重的生产结论 | 未实现，保持 null / UNVERIFIED |
 
@@ -136,7 +138,7 @@ BSD flags 和 ACL 在本实现里是 `UNVERIFIED`，不能写成 PASS。没有�
 
 环境：Python 3.12.3，Linux。不是 macOS。
 
-结果：10 项全部通过，最近一次 1.770 秒。除原有白名单、WAL、隔离恢复和伪造收据覆盖外，还包括只读捕获不改源、不打开源 SQLite、错误生产计划不写包、确认字符串和维护锁自证被拒绝，以及独立 metadata 探针默认不创建目录、不支持的 metadata 不是 PASS。
+结果：10 项全部通过，最近一次 1.848 秒。覆盖只读捕获不改源、不打开源 SQLite、xattr 后端缺失则失败、错误生产计划不写包，以及探针不把空 ACL 或不支持的 quarantine 当成 PASS。
 
 这些测试使用合成夹具。语义字段保持 null/UNVERIFIED。Linux 没有验证 macOS quarantine、BSD flags 或 ACL。
 
@@ -144,7 +146,9 @@ BSD flags 和 ACL 在本实现里是 `UNVERIFIED`，不能写成 PASS。没有�
 
 `f23bf92` 上的探针依赖 `receiver_whitelist_recovery.py` 和单元测试，不能按单文件许可执行。本文件替换了它。它只做 metadata 探针，不跑恢复测试。
 
-当前文件 SHA-256：`4a0f98ab7e1199ccd21a1cd577595dda3a84a0609ef68d85ef5a9e8f4dd30e02`
+当前文件 SHA-256：`6a88f0bc70ea11d8b21bd1181414af04098e7e152206c7cc267f0f5b77d6dcc6`
+
+它只检查自己创建的合成样本。quarantine 走 libSystem，不调用 `os.setxattr`。ACL 样本是 Apple 众所周知的 everyone UUID `ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C`，只允许 `ACL_READ_DATA`，不含 write、delete、append 或 chown，也不是当前用户身份。空 `acl_init` 文本不能通过。这个 PASS 不等于捕获工具已经保住了真实文件的元数据。
 
 依赖：Python 3 标准库（`json`、`os`、`stat`、`sys`、`tempfile`、`ctypes`、`pathlib`）。无仓库 import，不扫描当前目录。
 
@@ -154,6 +158,7 @@ BSD flags 和 ACL 在本实现里是 `UNVERIFIED`，不能写成 PASS。没有�
 export TMPDIR=/绝对路径/tmp目录
 export HOME=/绝对路径/家目录
 python3 macos_synthetic_metadata_probe.py --confirm-standalone-metadata-probe
+# e5b3f476 的旧许可不能用于这个新文件。
 ```
 
 `TMPDIR` 和 `HOME` 必须都显式存在、为绝对路径、整条路径无符号链接，且 `TMPDIR` 不在家目录内，也不经过 Applications、Group Containers、Application Support、Preferences、Library。脚本只新建 `$TMPDIR/rhythm-macos-probe-*.noindex`，在其中写合成 quarantine、mode、BSD flags、ACL 的归档与恢复比较，以及 `RESULT.json`。stdout 同时打印该路径和结果。不支持或未确认的项是 `SKIP` 或 `UNVERIFIED`，整体在四项都不是 `PASS` 时为 `UNVERIFIED`。不删除该目录，不读真实业务、钥匙串、App 或偏好，不启动 App，不拿锁。

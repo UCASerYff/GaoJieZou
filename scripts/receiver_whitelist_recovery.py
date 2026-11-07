@@ -543,17 +543,89 @@ def load_json_file(path):
     return data, parse_json(data)
 
 
+_CAPTURE_MODE = False
+_FORCE_XATTR_BACKEND = None
+_XATTR_NOFOLLOW = 0x0001
+
+
+def xattr_backend_name():
+    """Darwin uses the 6-argument libSystem calls. os.setxattr is not required."""
+    if _FORCE_XATTR_BACKEND:
+        return _FORCE_XATTR_BACKEND
+    if sys.platform == "darwin":
+        return "darwin-ctypes"
+    if hasattr(os, "listxattr") and hasattr(os, "getxattr") and hasattr(os, "setxattr"):
+        return "os"
+    return "missing"
+
+
+def _darwin_xattr_lib():
+    lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    lib.listxattr.argtypes = [ctypes.c_char_p, ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    lib.listxattr.restype = ctypes.c_ssize_t
+    lib.getxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+                             ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    lib.getxattr.restype = ctypes.c_ssize_t
+    lib.setxattr.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_void_p,
+                             ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+    lib.setxattr.restype = ctypes.c_int
+    return lib
+
+
+def list_xattr_bytes(path):
+    """Return {name: bytes} or None when the backend cannot read them."""
+    kind = xattr_backend_name()
+    if kind == "missing":
+        return None
+    if kind == "os":
+        try:
+            return {name: os.getxattr(path, name, follow_symlinks=False)
+                    for name in os.listxattr(path, follow_symlinks=False)}
+        except OSError:
+            fail("xattr_read_failed")
+    try:
+        lib = _darwin_xattr_lib()
+    except OSError:
+        return None
+    encoded = os.fsencode(path)
+    size = lib.listxattr(encoded, None, 0, _XATTR_NOFOLLOW)
+    if size < 0:
+        return None
+    buf = ctypes.create_string_buffer(max(size, 1))
+    if lib.listxattr(encoded, buf, size, _XATTR_NOFOLLOW) != size:
+        fail("xattr_read_failed")
+    found = {}
+    for name in [item for item in buf.raw[:size].split(b"\0") if item]:
+        length = lib.getxattr(encoded, name, None, 0, 0, _XATTR_NOFOLLOW)
+        if length < 0:
+            fail("xattr_read_failed")
+        value = ctypes.create_string_buffer(max(length, 1))
+        if lib.getxattr(encoded, name, value, length, 0, _XATTR_NOFOLLOW) != length:
+            fail("xattr_read_failed")
+        found[os.fsdecode(name)] = value.raw[:length]
+    return found
+
+
+def set_xattr_bytes(path, name, value):
+    kind = xattr_backend_name()
+    if kind == "os":
+        os.setxattr(path, name, value, follow_symlinks=False)
+        return
+    if kind != "darwin-ctypes":
+        raise OSError("xattr backend missing")
+    lib = _darwin_xattr_lib()
+    raw = ctypes.create_string_buffer(value)
+    if lib.setxattr(os.fsencode(path), os.fsencode(name), raw, len(value), 0, _XATTR_NOFOLLOW) != 0:
+        raise OSError(ctypes.get_errno(), "setxattr")
+
+
 def metadata_of(path):
     kind, info = lstat_kind(path)
     xattr_names = {}
-    xattr_status = "UNVERIFIED"
-    if hasattr(os, "listxattr") and hasattr(os, "getxattr"):
-        try:
-            names = sorted(os.listxattr(path, follow_symlinks=False))
-            xattr_names = {name: sha(os.getxattr(path, name, follow_symlinks=False)) for name in names}
-            xattr_status = "READ"
-        except OSError:
-            fail("xattr_read_failed")
+    found = list_xattr_bytes(path)
+    xattr_status = "UNVERIFIED" if found is None else "READ"
+    if found is not None:
+        xattr_names = {name: sha(value) for name, value in found.items()}
     flags = getattr(info, "st_flags", None)
     return {
         "type": "file" if kind == "file" else "directory",
@@ -615,19 +687,18 @@ def platform_policy():
 
 
 def copy_xattrs(source, target):
-    """Copy xattrs the running platform can round-trip. Apple names that the
-    platform refuses are reported as SKIP, never as preserved."""
+    """Copy source xattrs onto the destination only. The source is not modified."""
+    found = list_xattr_bytes(source)
+    if found is None:
+        if _CAPTURE_MODE:
+            fail("metadata_backend_unavailable")
+        return {}, [], "UNVERIFIED"
     preserved, skipped = {}, []
-    if not (hasattr(os, "listxattr") and hasattr(os, "getxattr") and hasattr(os, "setxattr")):
-        return preserved, skipped, "UNVERIFIED"
-    for name in sorted(os.listxattr(source, follow_symlinks=False)):
-        raw = os.getxattr(source, name, follow_symlinks=False)
+    for name, raw in sorted(found.items()):
         try:
-            os.setxattr(target, name, raw, follow_symlinks=False)
-            readback = os.getxattr(target, name, follow_symlinks=False)
+            set_xattr_bytes(target, name, raw)
+            readback = (list_xattr_bytes(target) or {}).get(name)
         except OSError:
-            if sys.platform == "darwin":
-                fail("xattr_not_preserved", name)
             skipped.append(name)
             continue
         if readback != raw:
@@ -636,13 +707,76 @@ def copy_xattrs(source, target):
     return preserved, skipped, "READ"
 
 
+def copy_bsd_flags(source, target):
+    """Set destination flags to the source value. Never changes the source."""
+    info = source.lstat()
+    flags = getattr(info, "st_flags", None)
+    if not hasattr(os, "chflags") or flags is None:
+        return "UNVERIFIED"
+    try:
+        os.chflags(target, flags, follow_symlinks=False)
+        readback = getattr(os.lstat(target), "st_flags", None)
+    except (AttributeError, OSError, NotImplementedError):
+        return "UNVERIFIED"
+    if readback is None or (readback & flags) != flags:
+        fail("flags_lowered_or_not_preserved")
+    return "PRESERVED" if readback == flags else "UNVERIFIED"
+
+
+def copy_acl(source, target):
+    """Copy an existing ACL. Absence is ABSENT, not a fidelity pass."""
+    if sys.platform != "darwin":
+        return "UNVERIFIED"
+    try:
+        lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        lib.acl_get_file.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        lib.acl_get_file.restype = ctypes.c_void_p
+        lib.acl_set_file.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_void_p]
+        lib.acl_set_file.restype = ctypes.c_int
+        lib.acl_to_text.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        lib.acl_to_text.restype = ctypes.c_void_p
+        lib.acl_free.argtypes = [ctypes.c_void_p]
+        lib.acl_free.restype = ctypes.c_int
+    except OSError:
+        return "UNVERIFIED"
+
+    def text_of(path):
+        handle = lib.acl_get_file(os.fsencode(path), 0x80)
+        if not handle:
+            return b""
+        raw = lib.acl_to_text(handle, None)
+        try:
+            return b"" if not raw else ctypes.cast(raw, ctypes.c_char_p).value or b""
+        finally:
+            if raw:
+                lib.acl_free(raw)
+            lib.acl_free(handle)
+
+    source_text = text_of(source)
+    if not source_text:
+        return "ABSENT"
+    handle = lib.acl_get_file(os.fsencode(source), 0x80)
+    if not handle or lib.acl_set_file(os.fsencode(target), 0x80, handle) != 0:
+        fail("metadata_not_preserved", "acl")
+    lib.acl_free(handle)
+    if text_of(target) != source_text:
+        fail("metadata_not_preserved", "acl")
+    return "PRESERVED"
+
+
+def apply_destination_metadata(source, target):
+    preserved, skipped, status = copy_xattrs(source, target)
+    require_preserved_xattrs(skipped)
+    return {"xattrsPreserved": sorted(preserved), "xattrDigests": preserved, "xattrsSkipped": skipped,
+            "xattrStatus": status, "bsdFlags": copy_bsd_flags(source, target), "acl": copy_acl(source, target)}
+
+
 def require_preserved_xattrs(skipped):
-    """Apple names cannot be stored on this Linux probe; any other miss fails."""
+    """A present attribute that cannot be copied fails. It is not recorded as preserved."""
     for name in skipped:
-        apple = name.startswith("com.apple.")
-        if sys.platform != "darwin" and apple:
+        if name.startswith("com.apple.") and sys.platform != "darwin" and not _CAPTURE_MODE:
             continue
-        fail("xattr_not_preserved", name)
+        fail("metadata_not_preserved", name)
 
 
 def write_bytes(path, data, mode):
@@ -988,6 +1122,8 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
                    allow_live_sources=False, maintenance_gate=None, production_plan_verified=None):
     migration = load_sibling("integrate_sources.py")
     upgrade = load_sibling("upgrade_data.py")
+    global _CAPTURE_MODE
+    _CAPTURE_MODE = bool(allow_live_sources)
     snapshot_database.opened = []
     group = guard_path(group, True, True)
     app_support = guard_path(app_support, True, True)
@@ -1141,11 +1277,12 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
             os.close(parent_fd)
     finally:
         os.close(lock_fd)
+        _CAPTURE_MODE = False
     require_bytes_stable(plan_path, plan_file_sha)
     require_bytes_stable(group / "Integration/authority.json", sha(authority_bytes))
     require_bytes_stable(receipt_path, sha(receipt_bytes))
     if allow_live_sources:
-        return public_capture_summary(output, production_plan_verified, policy)
+        return public_capture_summary(output, production_plan_verified, policy, metadata_fidelity(notes))
     return public_summary("exported", output, policy)
 
 
@@ -1312,6 +1449,7 @@ def whitelist_entries(included, preferences):
 
 def materialize(group, app_support, preferences, included, payload):
     notes = []
+    materialize.meta = []
     mapping = []
     for rel, item in included["group"].items():
         if item.get("directory"):
@@ -1337,20 +1475,18 @@ def materialize(group, app_support, preferences, included, payload):
             meta = metadata_of(source)
             if rel in CANONICAL:
                 summary, sidecars = snapshot_database(source, target, scratch_dir)
-                preserved, skipped, status = copy_xattrs(source, target)
-                require_preserved_xattrs(skipped)
                 os.chmod(target, meta["mode"], follow_symlinks=False)
+                applied = apply_destination_metadata(source, target)
                 os.utime(target, ns=(meta["mtimeNs"], meta["mtimeNs"]), follow_symlinks=False)
                 notes.append({"source": rel, "logical": summary, "sidecarsFolded": sidecars,
-                              "sourceSHA256": meta["sha256"], "snapshotSHA256": file_sha(target),
-                              "xattrsPreserved": sorted(preserved), "xattrsSkipped": skipped,
-                              "xattrStatus": status})
+                              "sourceSHA256": meta["sha256"], "snapshotSHA256": file_sha(target), **applied})
+                materialize.meta.append(applied)
             else:
                 write_bytes(target, read_file(source), 0o600)
                 os.chmod(target, meta["mode"], follow_symlinks=False)
-                preserved, skipped, status = copy_xattrs(source, target)
-                require_preserved_xattrs(skipped)
+                applied = apply_destination_metadata(source, target)
                 os.utime(target, ns=(meta["mtimeNs"], meta["mtimeNs"]), follow_symlinks=False)
+                materialize.meta.append(applied)
                 if file_sha(target) != meta["sha256"]:
                     fail("copy_checksum_mismatch")
         for domain, item in preferences.items():
@@ -1361,8 +1497,7 @@ def materialize(group, app_support, preferences, included, payload):
         if source is not None:
             meta = metadata_of(source)
             os.chmod(directory, meta["mode"], follow_symlinks=False)
-            _preserved, skipped, _status = copy_xattrs(source, directory)
-            require_preserved_xattrs(skipped)
+            materialize.meta.append(apply_destination_metadata(source, directory))
             os.utime(directory, ns=(meta["mtimeNs"], meta["mtimeNs"]), follow_symlinks=False)
         else:
             os.chmod(directory, 0o700, follow_symlinks=False)
@@ -1497,19 +1632,32 @@ def _runtime_report(payload, upgrade, migration):
     }
 
 
+def _collapse_status(values, preserved_token):
+    values = {value for value in values if value is not None}
+    if not values or "UNVERIFIED" in values:
+        return "UNVERIFIED"
+    if preserved_token in values and values <= {preserved_token, "ABSENT"}:
+        return preserved_token
+    if values == {"ABSENT"}:
+        return "ABSENT"
+    return "UNVERIFIED"
+
+
 def metadata_fidelity(notes):
-    preserved = any("com.apple.quarantine" in note.get("xattrsPreserved", []) for note in notes)
+    rows = list(getattr(materialize, "meta", []) or []) + list(notes)
     fidelity = {
         "mode": "COMPARED",
         "preservedUserXattrs": "COMPARED",
-        "appleQuarantine": "PRESERVED" if preserved else "UNVERIFIED",
-        "bsdFlags": "UNVERIFIED",
-        "acl": "UNVERIFIED",
+        "appleQuarantine": "PRESERVED" if any(
+            "com.apple.quarantine" in row.get("xattrsPreserved", []) for row in rows) else "UNVERIFIED",
+        "bsdFlags": _collapse_status((row.get("bsdFlags") for row in rows), "PRESERVED"),
+        "acl": _collapse_status((row.get("acl") for row in rows), "PRESERVED"),
         "archiveToRestoreMetadataExact": None,
         "productionReady": False,
     }
-    if fidelity["appleQuarantine"] == "PASS" or fidelity["bsdFlags"] == "PASS" or fidelity["acl"] == "PASS":
-        fail("metadata_fidelity_pass_forged")
+    for key in ("appleQuarantine", "bsdFlags", "acl"):
+        if fidelity[key] == "PASS":
+            fail("metadata_fidelity_pass_forged")
     return fidelity
 
 
@@ -1624,7 +1772,7 @@ def seal_capture_fields(fields):
     return {name: fields[name] for name in ROOT_FIELD_ORDER}
 
 
-def public_capture_summary(path, production_plan_verified, policy):
+def public_capture_summary(path, production_plan_verified, policy, fidelity):
     return {
         "status": "captured_not_production_ready",
         "package": path.name,
@@ -1638,8 +1786,9 @@ def public_capture_summary(path, production_plan_verified, policy):
         "semanticVerification": "UNVERIFIED",
         "macosQuarantineFidelity": policy["macosQuarantineFidelity"],
         "appleMetadata": policy["appleMetadata"],
-        "bsdFlags": "UNVERIFIED",
-        "acl": "UNVERIFIED",
+        "appleQuarantine": fidelity["appleQuarantine"],
+        "bsdFlags": fidelity["bsdFlags"],
+        "acl": fidelity["acl"],
         "scope": "external_noindex_capture",
     }
 
@@ -1994,15 +2143,15 @@ def place_tree(source, dest, staging):
             file_meta = metadata_of(entry)
             write_bytes(target, read_file(entry), 0o600)
             os.chmod(target, file_meta["mode"], follow_symlinks=False)
-            preserved, skipped, _ = copy_xattrs(entry, target)
-            if file_meta["xattrs"] != preserved or skipped:
+            applied = apply_destination_metadata(entry, target)
+            if applied["xattrDigests"] != file_meta["xattrs"] or applied["xattrsSkipped"]:
                 fail("restore_xattr_mismatch", entry.name)
             os.utime(target, ns=(file_meta["mtimeNs"], file_meta["mtimeNs"]), follow_symlinks=False)
         else:
             fail("unsupported_file_type")
     os.chmod(dest, meta["mode"], follow_symlinks=False)
-    preserved, skipped, _ = copy_xattrs(source, dest)
-    if meta["xattrs"] != preserved or skipped:
+    applied = apply_destination_metadata(source, dest)
+    if applied["xattrDigests"] != meta["xattrs"] or applied["xattrsSkipped"]:
         fail("restore_xattr_mismatch", dest.name)
     os.utime(dest, ns=(meta["mtimeNs"], meta["mtimeNs"]), follow_symlinks=False)
 
