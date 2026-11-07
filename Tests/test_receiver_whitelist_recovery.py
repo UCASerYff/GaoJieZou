@@ -12,8 +12,10 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import errno
 import plistlib
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -677,33 +679,130 @@ class StandaloneProbeTests(unittest.TestCase):
             target.mkdir()
             link.symlink_to(target)
             self.assertEqual(probe.validate_roots(str(link), str(house)), "symlink_path_refused")
-            everyone = {"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data",)}
+            everyone = {"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data",), "flags": ()}
             status, diagnostic = probe.synthetic_acl_verdict([everyone])
             self.assertEqual(status, "PASS")
             self.assertEqual(diagnostic["qualifierClass"], "everyone")
             for bad in (
                 [],
                 [everyone, everyone],
-                [{"tag": "allow", "qualifierClass": "other", "perms": ("read_data",)}],
-                [{"tag": "deny", "qualifierClass": "everyone", "perms": ("read_data",)}],
-                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "write_data")}],
-                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "append_data")}],
-                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "delete")}],
-                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "change_owner")}],
-                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_attributes",)}],
-                [{"tag": "allow", "qualifierClass": "everyone", "perms": ()}],
+                [{"tag": "allow", "qualifierClass": "other", "perms": ("read_data",), "flags": ()}],
+                [{"tag": "deny", "qualifierClass": "everyone", "perms": ("read_data",), "flags": ()}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "write_data"), "flags": ()}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "append_data"), "flags": ()}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "delete"), "flags": ()}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data", "change_owner"), "flags": ()}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_attributes",), "flags": ()}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": (), "flags": ()}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data",), "flags": ("file_inherit",)}],
+                [{"tag": "allow", "qualifierClass": "everyone", "perms": ("read_data",)}],
             ):
                 self.assertEqual(probe.synthetic_acl_verdict(bad)[0], "UNVERIFIED")
             self.assertEqual(probe.qualifier_class(probe.EVERYONE_UUID), "everyone")
             self.assertEqual(probe.qualifier_class(b"\x11" * 16), "other")
             user = b"\x22" * 16
-            left = [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2,)}]
+            left = [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2,), "flags": ()}]
             self.assertTrue(tool.acl_structure_equal(left, [dict(item) for item in left]))
-            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": user, "perms": (2,)}]))
-            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2, 4)}]))
+            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": user, "perms": (2,), "flags": ()}]))
+            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2, 4), "flags": ()}]))
+            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2,), "flags": (0x20,)}]))
+            self.assertFalse(tool.acl_structure_equal(left, [{"tag": 1, "qualifier": probe.EVERYONE_UUID, "perms": (2,)}]))
             self.assertFalse(tool.acl_structure_equal(left, []))
         finally:
             work.cleanup()
+
+
+class ProbeScheduleTests(unittest.TestCase):
+    def setUp(self):
+        self.work = tempfile.TemporaryDirectory(suffix=".noindex")
+        self.base = Path(self.work.name)
+        self.home = self.base / "home"
+        self.tmp = self.base / "tmp"
+        self.home.mkdir()
+        self.tmp.mkdir()
+
+    def tearDown(self):
+        self.work.cleanup()
+
+    def env(self):
+        return {"TMPDIR": str(self.tmp), "HOME": str(self.home)}
+
+    def test_main_confirm_run_in_sets_acl_only_after_both_files_exist(self):
+        probe = load("standalone_probe_schedule", ROOT / "scripts/macos_synthetic_metadata_probe.py")
+        seen = []
+
+        class DarwinACL:
+            def acl_set_file(self, path, _typ, _payload):
+                text = os.fsdecode(path)
+                info = os.lstat(text)
+                seen.append({"path": text, "regular": stat.S_ISREG(info.st_mode),
+                             "mode": stat.S_IMODE(info.st_mode), "bytes": Path(text).read_bytes()})
+                return 0
+
+            def entries(self, _path):
+                return [{"tag": "allow", "qualifierClass": "everyone",
+                         "perms": ("read_data",), "flags": ()}]
+
+        code = probe.main([probe.CONFIRM], self.env(), platform="darwin", lib=DarwinACL())
+        self.assertEqual(code, 0)
+        created = next(self.tmp.glob("rhythm-macos-probe-*.noindex"))
+        self.assertTrue(created.exists())
+        archive = created / "archive/sample.bin"
+        restore = created / "restore/sample.bin"
+        self.assertEqual(archive.read_bytes(), restore.read_bytes())
+        self.assertEqual([item["path"] for item in seen], [str(archive), str(restore)])
+        self.assertTrue(all(item["regular"] and item["mode"] == 0o640 and item["bytes"] == archive.read_bytes()
+                            for item in seen))
+        for item in seen:
+            self.assertTrue(item["path"].startswith(str(created) + os.sep))
+        body = json.loads((created / "RESULT.json").read_text())
+        self.assertEqual(body["acl"], "PASS")
+        self.assertEqual(body["mode"], "PASS")
+        self.assertEqual(body["metadataOverall"], "UNVERIFIED")
+        self.assertEqual(body["aclDiagnostic"]["stage"], "verdict")
+        self.assertFalse(body["deleted"])
+        self.assertFalse(body["realRecoveryCompleted"])
+        self.assertEqual(probe.report_exit(body), 0)
+        self.assertEqual(probe.report_exit({"metadataOverall": "BROKEN"}), 1)
+
+    def test_missing_restore_is_enoent_before_any_acl_write(self):
+        probe = load("standalone_probe_enoent", ROOT / "scripts/macos_synthetic_metadata_probe.py")
+        samples = self.base / "samples"
+        samples.mkdir()
+        archive, restore = probe.prepare_samples(samples)
+        restore.unlink()
+        status, diagnostic = probe.probe_acl(archive, restore, lib=object())
+        self.assertEqual(status, "UNVERIFIED")
+        self.assertEqual(diagnostic, {"stage": "set_file", "which": "restore", "errno": 2,
+                                      "readApi": "acl_get_entry"})
+        self.assertEqual(diagnostic["errno"], errno.ENOENT)
+
+    def test_confirm_refusal_and_prepare_failure_keep_diagnostics(self):
+        probe = load("standalone_probe_refuse", ROOT / "scripts/macos_synthetic_metadata_probe.py")
+        self.assertEqual(probe.main([], self.env(), platform="darwin"), 0)
+        self.assertEqual(list(self.tmp.glob("rhythm-macos-probe-*.noindex")), [])
+        self.assertEqual(probe.main([probe.CONFIRM], {}, platform="darwin"), 2)
+        link = self.base / "linked-tmp"
+        link.symlink_to(self.tmp)
+        self.assertEqual(probe.main([probe.CONFIRM], {"TMPDIR": str(link), "HOME": str(self.home)},
+                                    platform="darwin"), 2)
+        inside = self.home / "tmp"
+        inside.mkdir()
+        self.assertEqual(probe.main([probe.CONFIRM], {"TMPDIR": str(inside), "HOME": str(self.home)},
+                                    platform="darwin"), 2)
+        self.assertEqual(list(self.tmp.glob("rhythm-macos-probe-*.noindex")), [])
+
+        def explode(_created, lib=None):
+            raise OSError(errno.ENOENT, "prepare")
+
+        code = probe.confirm(self.env(), platform="darwin", runner=explode)
+        self.assertEqual(code, 0)
+        created = next(self.tmp.glob("rhythm-macos-probe-*.noindex"))
+        body = json.loads((created / "RESULT.json").read_text())
+        self.assertEqual(body["aclDiagnostic"]["stage"], "prepare")
+        self.assertEqual(body["aclDiagnostic"]["errno"], errno.ENOENT)
+        self.assertEqual(body["metadataOverall"], "UNVERIFIED")
+        self.assertTrue(created.exists())
 
 
 if __name__ == "__main__":

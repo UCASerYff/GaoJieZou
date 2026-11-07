@@ -17,6 +17,7 @@ Application Support, Preferences, or the home directory is read.
 from __future__ import annotations
 
 import ctypes
+import errno
 import json
 import os
 import stat
@@ -84,12 +85,32 @@ def copy_bytes(source, dest):
 
 
 def probe_mode(archive, restore):
-    os.chmod(archive, 0o640, follow_symlinks=False)
-    copy_bytes(archive, restore)
-    os.chmod(restore, 0o640, follow_symlinks=False)
-    left = stat.S_IMODE(os.lstat(archive).st_mode)
-    right = stat.S_IMODE(os.lstat(restore).st_mode)
+    """Compare modes. Both files must already exist; this does not create them."""
+    try:
+        left = stat.S_IMODE(os.lstat(archive).st_mode)
+        right = stat.S_IMODE(os.lstat(restore).st_mode)
+    except FileNotFoundError:
+        return "UNVERIFIED"
     return "PASS" if left == right == 0o640 else "UNVERIFIED"
+
+
+def prepare_samples(created):
+    """Create archive and restore files before any metadata call."""
+    archive_dir = created / "archive"
+    restore_dir = created / "restore"
+    archive_dir.mkdir(mode=0o700)
+    restore_dir.mkdir(mode=0o700)
+    archive = archive_dir / "sample.bin"
+    restore = restore_dir / "sample.bin"
+    archive.write_bytes(b"synthetic-metadata-not-user-data")
+    copy_bytes(archive, restore)
+    os.chmod(archive, 0o640, follow_symlinks=False)
+    os.chmod(restore, 0o640, follow_symlinks=False)
+    if not archive.is_file() or not restore.is_file():
+        raise OSError(errno.ENOENT, "probe sample missing after prepare")
+    if archive.read_bytes() != restore.read_bytes():
+        raise OSError("probe sample bytes diverged during prepare")
+    return archive, restore
 
 
 # Darwin getxattr/setxattr take a position argument. The os module helpers are a different ABI.
@@ -127,6 +148,13 @@ FORBIDDEN_PERMS = frozenset({
     "write_data", "delete", "append_data", "delete_child", "write_attributes",
     "write_extattributes", "write_security", "change_owner",
 })
+FLAG_BITS = {
+    0x10: "inherited",
+    0x20: "file_inherit",
+    0x40: "directory_inherit",
+    0x80: "limit_inherit",
+    0x100: "only_inherit",
+}
 
 
 def qualifier_class(raw):
@@ -162,6 +190,14 @@ def synthetic_acl_verdict(entries):
         return "UNVERIFIED", diagnostic
     if entry.get("qualifierClass") != "everyone":
         diagnostic["stage"] = "qualifier"
+        return "UNVERIFIED", diagnostic
+    if "flags" not in entry:
+        diagnostic["stage"] = "flagset"
+        return "UNVERIFIED", diagnostic
+    flags = tuple(entry.get("flags") or ())
+    diagnostic["flags"] = list(flags)
+    if flags != ():
+        diagnostic["stage"] = "flagset"
         return "UNVERIFIED", diagnostic
     if frozenset(perms) & FORBIDDEN_PERMS or set(perms) != {"read_data"}:
         diagnostic["stage"] = "perms"
@@ -305,7 +341,31 @@ def _entry_record(lib, entry):
                 names.append(name)
             elif present < 0:
                 names.append("unreadable")
-    return {"tag": tag_name, "qualifierClass": qualifier_class(raw), "perms": tuple(names)}
+    record = {"tag": tag_name, "qualifierClass": qualifier_class(raw), "perms": tuple(names)}
+    flags = _flag_names(lib, entry)
+    if flags is not None:
+        record["flags"] = flags
+    return record
+
+
+def _flag_names(lib, entry):
+    if not hasattr(lib, "acl_get_flagset_np") or not hasattr(lib, "acl_get_flag_np"):
+        return None
+    lib.acl_get_flagset_np.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+    lib.acl_get_flagset_np.restype = ctypes.c_int
+    lib.acl_get_flag_np.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    lib.acl_get_flag_np.restype = ctypes.c_int
+    flagset = ctypes.c_void_p()
+    if lib.acl_get_flagset_np(entry, ctypes.byref(flagset)) != 0:
+        return None
+    names = []
+    for bit, name in sorted(FLAG_BITS.items()):
+        present = lib.acl_get_flag_np(flagset, bit)
+        if present == 1:
+            names.append(name)
+        elif present < 0:
+            return None
+    return tuple(names)
 
 
 def read_acl_entries(lib, path):
@@ -337,52 +397,72 @@ def read_acl_entries(lib, path):
     return entries, diagnostic
 
 
-def probe_acl(archive, restore):
+def guard_acl_targets(archive, restore):
+    """Refuse to call acl_set_file until both regular files exist."""
+    for label, path in (("archive", archive), ("restore", restore)):
+        if not os.path.lexists(path):
+            return "UNVERIFIED", {"stage": "set_file", "which": label, "errno": errno.ENOENT,
+                                  "readApi": "acl_get_entry"}
+        info = os.lstat(path)
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            return "UNVERIFIED", {"stage": "set_file", "which": label, "errno": errno.EPERM,
+                                  "readApi": "acl_get_entry"}
+    return None
+
+
+def probe_acl(archive, restore, lib=None):
     """Capability check for one synthetic everyone-read ACE. Not archive fidelity."""
-    if sys.platform != "darwin":
+    missing = guard_acl_targets(archive, restore)
+    if missing:
+        return missing
+    if lib is None and sys.platform != "darwin":
         return "SKIP", {"stage": "platform", "readApi": "none"}
-    try:
-        lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
-    except OSError:
-        return "SKIP", {"stage": "libsystem", "readApi": "none"}
-    if not _bind_acl(lib):
-        return "SKIP", {"stage": "symbols", "readApi": "acl_get_entry"}
-    try:
-        acl = _synthetic_everyone_read_acl(lib)
-        if acl is None:
-            return "UNVERIFIED", {"stage": "create_entry", "readApi": "acl_get_entry"}
+    if lib is None:
+        try:
+            lib = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        except OSError:
+            return "SKIP", {"stage": "libsystem", "readApi": "none"}
+        if not _bind_acl(lib):
+            return "SKIP", {"stage": "symbols", "readApi": "acl_get_entry"}
+        try:
+            acl = _synthetic_everyone_read_acl(lib)
+            if acl is None:
+                return "UNVERIFIED", {"stage": "create_entry", "readApi": "acl_get_entry"}
+            for label, path in (("archive", archive), ("restore", restore)):
+                if lib.acl_set_file(os.fsencode(path), ACL_TYPE_EXTENDED, acl) != 0:
+                    return "UNVERIFIED", {"stage": "set_file", "which": label, "errno": ctypes.get_errno(),
+                                          "readApi": "acl_get_entry"}
+            left, left_diag = read_acl_entries(lib, archive)
+            right, _right_diag = read_acl_entries(lib, restore)
+        except (OSError, AttributeError):
+            return "UNVERIFIED", {"stage": "exception", "readApi": "acl_get_entry"}
+    else:
         for label, path in (("archive", archive), ("restore", restore)):
-            if lib.acl_set_file(os.fsencode(path), ACL_TYPE_EXTENDED, acl) != 0:
-                return "UNVERIFIED", {"stage": "set_file", "which": label, "errno": ctypes.get_errno(),
+            rc = lib.acl_set_file(os.fsencode(path), ACL_TYPE_EXTENDED, b"synthetic-acl")
+            if rc != 0:
+                return "UNVERIFIED", {"stage": "set_file", "which": label, "errno": rc,
                                       "readApi": "acl_get_entry"}
-        left, left_diag = read_acl_entries(lib, archive)
-        right, right_diag = read_acl_entries(lib, restore)
-    except (OSError, AttributeError):
-        return "UNVERIFIED", {"stage": "exception", "readApi": "acl_get_entry"}
+        left, right = lib.entries(archive), lib.entries(restore)
     status, diagnostic = synthetic_acl_verdict(left)
-    diagnostic["restoreEntryCount"] = right_diag.get("entryCount")
+    diagnostic["restoreEntryCount"] = len(right)
     if left != right:
         diagnostic["stage"] = "archive_restore_mismatch"
         return "UNVERIFIED", diagnostic
     return status, diagnostic
 
 
-def run_in(created):
-    """Compare synthetic archive and restore metadata. Never upgrades a gap to PASS."""
-    archive_dir = created / "archive"
-    restore_dir = created / "restore"
-    archive_dir.mkdir(mode=0o700)
-    restore_dir.mkdir(mode=0o700)
-    archive = archive_dir / "sample.bin"
-    restore = restore_dir / "sample.bin"
-    archive.write_bytes(b"synthetic-metadata-not-user-data")
-    acl_status, acl_diagnostic = probe_acl(archive, restore)
+def run_in(created, lib=None):
+    """Prepare both files, then measure. Metadata calls must not create restore."""
+    archive, restore = prepare_samples(created)
+    acl_status, acl_diagnostic = probe_acl(archive, restore, lib=lib)
     results = {
         "mode": probe_mode(archive, restore),
         "quarantine": probe_quarantine(archive, restore),
         "bsdFlags": probe_flags(archive, restore),
         "acl": acl_status,
         "aclDiagnostic": acl_diagnostic,
+        "archive": str(archive),
+        "restore": str(restore),
     }
     for name in CAPABILITIES:
         if results[name] not in ("PASS", "SKIP", "UNVERIFIED"):
@@ -391,8 +471,16 @@ def run_in(created):
     return results
 
 
-def confirm(environ):
-    if sys.platform != "darwin":
+def report_exit(measured):
+    """Exit 0 means the report was written. It does not mean metadataOverall is PASS."""
+    if measured.get("metadataOverall") in ("PASS", "UNVERIFIED"):
+        return 0
+    return 1
+
+
+def confirm(environ, platform=None, lib=None, runner=None):
+    platform = sys.platform if platform is None else platform
+    if platform != "darwin":
         return emit({"status": "refused", "code": "macos_probe_requires_darwin", "created": None,
                      "metadataOverall": "NOT_RUN", "realRecoveryCompleted": False,
                      "dependencies": ["python-stdlib"]}, 2)
@@ -408,20 +496,22 @@ def confirm(environ):
         return emit({"status": "refused", "code": "probe_directory_not_isolated", "created": str(created),
                      "deleted": False, "metadataOverall": "NOT_RUN", "realRecoveryCompleted": False}, 2)
     try:
-        measured = run_in(created)
+        measured = (run_in if runner is None else runner)(created, lib=lib)
     except OSError as error:
         measured = {name: "UNVERIFIED" for name in CAPABILITIES}
         measured["metadataOverall"] = "UNVERIFIED"
+        measured["aclDiagnostic"] = {"stage": "prepare", "errno": error.errno or errno.ENOENT,
+                                     "readApi": "acl_get_entry"}
         measured["error"] = type(error).__name__
     result = {"status": "probe_finished_directory_retained", "kind": PROBE_KIND, "created": str(created),
               "deleted": False, "appLaunched": False, "locksAcquired": [], "repositoryImports": [],
               "dependencies": ["python-stdlib"], "scannedCwd": False, "recoveryTestRan": False,
               "realRecoveryCompleted": False, "productionReady": False, **measured}
     (created / "RESULT.json").write_text(json.dumps(result, ensure_ascii=False, sort_keys=True) + "\n")
-    return emit(result, 0 if measured.get("metadataOverall") in ("PASS", "UNVERIFIED") else 1)
+    return emit(result, report_exit(measured))
 
 
-def main(argv, environ=None):
+def main(argv, environ=None, platform=None, lib=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     environ = os.environ if environ is None else environ
     if argv != [CONFIRM]:
@@ -431,7 +521,7 @@ def main(argv, environ=None):
                          "dependencies": ["python-stdlib"]})
         return emit({"status": "refused", "code": "probe_arguments_refused", "created": None,
                      "metadataOverall": "NOT_RUN", "realRecoveryCompleted": False}, 2)
-    return confirm(environ)
+    return confirm(environ, platform=platform, lib=lib)
 
 
 if __name__ == "__main__":

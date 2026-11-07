@@ -138,7 +138,7 @@ python3 scripts/receiver_whitelist_recovery.py verify \
 
 环境：Python 3.12.3，Linux。不是 macOS。
 
-结果：10 项全部通过，最近一次 1.732 秒。覆盖只读捕获不改源、不打开源 SQLite，以及 ACL 结构判定的正例和 write/delete/append/chown、第二条 ACE、其它 UUID 等反例。
+结果：`python3 Tests/test_receiver_whitelist_recovery.py`，13 项全部通过，最近一次 1.712 秒。其中包括 `main → confirm → run_in` 的 mock Darwin 调度：两个样本先存在且为 0640，ACL 写入只落在探针目录内，缺文件诊断为 `set_file/restore/errno 2`，未确认、未知环境和符号链接在创建目录前拒绝。整体 `metadataOverall` 在 Linux 上仍是 `UNVERIFIED`。
 
 这些测试使用合成夹具。语义字段保持 null/UNVERIFIED。Linux 没有验证 macOS quarantine、BSD flags 或 ACL。
 
@@ -146,7 +146,9 @@ python3 scripts/receiver_whitelist_recovery.py verify \
 
 `f23bf92` 上的探针依赖 `receiver_whitelist_recovery.py` 和单元测试，不能按单文件许可执行。本文件替换了它。它只做 metadata 探针，不跑恢复测试。
 
-当前文件 SHA-256：`32cbab45ffda3b8e23c8ae3b2b2e04020a2e30244bd3e19c25d3b6418d76412a`
+当前文件 SHA-256：`1163bb36150c3c01e48bb2a4c1b14c68233d7a8ea5a7b793da6d702b3b2d6ff7`
+
+`53ea49ab` 的 `errno 2` 是 restore 尚未创建就调用 `acl_set_file`，不是系统不支持 ACL。现在先创建两个样本并设好 mode，再测 quarantine、flags 和 ACL。ACE 还读取继承 flagset；合成样本必须没有继承位。捕获工具把 flagset 纳入逐条比较，读不到 flagset 就不声称 ACL 已保全。
 
 它只检查自己创建的合成样本。quarantine 走 libSystem，不调用 `os.setxattr`。ACL 用 `acl_get_entry`、tag、qualifier 和 permset 判断，不看 `ls` 文本。通过条件是恰好一条 ACE：tag 为 allow，qualifier 的 16 字节正好是 everyone UUID `ABCDEFAB-CDEF-ABCD-EFAB-CDEF0000000C`，权限集合恰好是 `read_data`。其它 UUID 只记为 `other`，不写入诊断。`UNVERIFIED` 时 stdout 和 `RESULT.json` 带 `aclDiagnostic`（stage、entryCount、tag、qualifierClass、perms、errno），没有路径或用户身份。这个 PASS 不等于捕获工具已经保住了真实文件的元数据。捕获工具用同一结构做任意现用 ACL 的逐条相等比较，不套用 everyone 样本过滤器；读不出来或对不上就失败或保持 `UNVERIFIED`。
 

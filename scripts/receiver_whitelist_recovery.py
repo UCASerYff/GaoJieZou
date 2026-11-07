@@ -734,6 +734,10 @@ def acl_structure_equal(left, right):
             return False
         if tuple(first.get("perms") or ()) != tuple(second.get("perms") or ()):
             return False
+        if "flags" not in first or "flags" not in second:
+            return False
+        if tuple(first["flags"]) != tuple(second["flags"]):
+            return False
     return True
 
 
@@ -757,11 +761,15 @@ def copy_acl(source, target):
         lib.acl_get_permset.restype = ctypes.c_int
         lib.acl_get_perm_np.argtypes = [ctypes.c_void_p, ctypes.c_uint]
         lib.acl_get_perm_np.restype = ctypes.c_int
+        lib.acl_get_flagset_np.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
+        lib.acl_get_flagset_np.restype = ctypes.c_int
+        lib.acl_get_flag_np.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        lib.acl_get_flag_np.restype = ctypes.c_int
         lib.acl_free.argtypes = [ctypes.c_void_p]
         lib.acl_free.restype = ctypes.c_int
     except OSError:
         return "UNVERIFIED"
-    if not hasattr(lib, "acl_get_entry"):
+    if not hasattr(lib, "acl_get_entry") or not hasattr(lib, "acl_get_flagset_np"):
         return "UNVERIFIED"
 
     def entries_of(path):
@@ -790,7 +798,17 @@ def copy_acl(source, target):
                     for bit in range(1, 15):
                         if lib.acl_get_perm_np(permset, 1 << bit) == 1:
                             bits.append(1 << bit)
-                found.append({"tag": tag.value, "qualifier": raw, "perms": tuple(bits)})
+                flagset = ctypes.c_void_p()
+                if lib.acl_get_flagset_np(entry, ctypes.byref(flagset)) != 0:
+                    return None
+                flag_bits = []
+                for bit in (0x10, 0x20, 0x40, 0x80, 0x100):
+                    present = lib.acl_get_flag_np(flagset, bit)
+                    if present == 1:
+                        flag_bits.append(bit)
+                    elif present < 0:
+                        return None
+                found.append({"tag": tag.value, "qualifier": raw, "perms": tuple(bits), "flags": tuple(flag_bits)})
                 entry_id = -1
         finally:
             lib.acl_free(handle)
