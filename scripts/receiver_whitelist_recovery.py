@@ -16,6 +16,8 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import ctypes
+import errno
 import hashlib
 import importlib.util
 import json
@@ -73,6 +75,36 @@ MOVE_OWNERS = {
     "SharedSleep": "mixed_shared_sleep",
     "SourceArchives": "mixed_source_archives",
 }
+# Specification copied from the 2026-11-05 preparation note. Not an execution proof.
+PRODUCTION_PLAN_FILE_SHA256 = "333685220a4be4e773f9b10f8c1c6e904b363d10799a79489b413758346599e6"
+PRODUCTION_TRANSACTION_ID = "RootRhythm41011-20261104-03"
+ROOT_FIELD_ORDER = (
+    "status",
+    "captureAt",
+    "restoreCheckAt",
+    "rootMaintenanceEvidence",
+    "freshCurrentBackup",
+    "whitelistAndExclusionManifestSHA256",
+    "authoritySHA256",
+    "sameActiveTransactionVerified",
+    "productionPlanByteHashVerified",
+    "originalTransactionReceiptSHA256",
+    "payloadMetadataPolicy",
+    "actualArchiveTreeSHA256",
+    "isolatedRestoreTargetIdentity",
+    "actualArchiveToRestoreMetadataExact",
+    "fourPreferenceDomainsPresenceAndValuesVerified",
+    "threeCurrentDatabasesConsistent",
+    "attachmentsAndGameProgressVerified",
+    "sharedSleepSeedTombstoneRequestRewardDedupVerified",
+    "receiverSourceArchivesRhythmAndAbsencesPreservedOrPreciselyRecoverable",
+    "currentReadersCompatible",
+    "runtimeOnlyCompatibleWithUnchangedRootPlanAndReceipt",
+    "pureSourceRawExcludedFromRecoverablePackage",
+    "reMigrationPerformed",
+    "reActivationPerformed",
+    "activeBusinessRolledBack",
+)
 
 
 class RecoveryError(Exception):
@@ -128,6 +160,87 @@ def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
 
 
+def root_actual_current_recovery_fields():
+    """Initial values from the preparation note. This phase cannot advance them."""
+    fields = {name: None for name in ROOT_FIELD_ORDER}
+    fields["status"] = "NOT_EXECUTED"
+    fields["reMigrationPerformed"] = False
+    fields["reActivationPerformed"] = False
+    fields["activeBusinessRolledBack"] = False
+    return fields
+
+
+def seal_root_fields(fields):
+    if not isinstance(fields, dict) or tuple(fields) != ROOT_FIELD_ORDER and set(fields) != set(ROOT_FIELD_ORDER):
+        fail("root_receipt_fields_incomplete")
+    if len(fields) != 25:
+        fail("root_receipt_fields_incomplete")
+    expected = root_actual_current_recovery_fields()
+    for name in ROOT_FIELD_ORDER:
+        if fields.get(name) is True:
+            fail("root_field_prefilled_true", name)
+        if fields.get(name) != expected[name]:
+            fail("root_field_not_at_preparation_value", name)
+    return {name: fields[name] for name in ROOT_FIELD_ORDER}
+
+
+def preparation_contract():
+    return {
+        "schemaVersion": 1,
+        "kind": "ControlledCurrentReceiverRecoveryPreparation",
+        "app": "搞节奏",
+        "role": "specification_not_execution_proof",
+        "transactionID": PRODUCTION_TRANSACTION_ID,
+        "productionPlanRelative": "RootCutover-20261104-03.noindex/migration-plan.json",
+        "productionPlanFileSHA256": PRODUCTION_PLAN_FILE_SHA256,
+        "runtimeVerifyEntry": "scripts/integrate_sources.py verify --plan <unchanged actual production plan> --runtime-only",
+        "hostRestoreEntry": "Host/AppBackupRestore.swift prepare -> schedule -> next-launch applyPending",
+        "executeAllowed": False,
+        "sourceRetirementAuthorizedByThisNote": False,
+        "existingCurrentWhitelistExecutorFound": False,
+        "actualCurrentRestoreExecuted": False,
+        "citedIdentityEvidence": {
+            "programZIP_SHA256": "fda4f5d9…5b41e3",
+            "hostMachO_SHA256": "532af63f…7a81e",
+            "sourceCommit": "8c839144fe0a58a62f70bcaf3a04f1982aae8dff",
+            "sourceZIP_SHA256": "91ad6747…8c190b0",
+            "rootRouteReceipt_SHA256": "6f1b5d75…1736",
+            "truncatedHashesAreNotFullValues": True,
+            "routePassIsNotCurrentRestorePass": True,
+        },
+        "readOnlyCapture": {
+            "implemented": False,
+            "activeWriteProtection": "remains_closed",
+            "liveRootsRemainRefused": True,
+            "requiredBeforeAnyFutureRead": [
+                "explicit_user_authorization_for_one_read_only_capture",
+                "root_maintenance_proof_with_owner_interval_writer_set_and_proof_sha",
+                "writers_paused_without_taking_build_or_foreground_locks",
+                "destination_is_a_new_noindex_outside_live_roots",
+                "refuse_restore_onto_live_group_support_preferences_or_applications",
+                "production_plan_byte_hash_stays_null_until_that_authorized_read_hashes_the_real_file",
+            ],
+        },
+    }
+
+
+def seal_preparation(value):
+    expected = preparation_contract()
+    if value.get("productionPlanFileSHA256") != PRODUCTION_PLAN_FILE_SHA256:
+        fail("production_plan_specification_changed")
+    if value.get("transactionID") != PRODUCTION_TRANSACTION_ID:
+        fail("production_transaction_specification_changed")
+    for key in ("executeAllowed", "sourceRetirementAuthorizedByThisNote",
+                "existingCurrentWhitelistExecutorFound", "actualCurrentRestoreExecuted"):
+        if value.get(key) is not False:
+            fail("preparation_gate_flipped", key)
+    if value.get("readOnlyCapture", {}).get("implemented") is not False:
+        fail("read_only_capture_not_authorized")
+    if value.get("role") != expected["role"]:
+        fail("preparation_role_changed")
+    return value
+
+
 def live_roots(home):
     return (
         home / "Library/Group Containers" / GROUP_ID,
@@ -137,12 +250,92 @@ def live_roots(home):
     )
 
 
+def logical_path(path):
+    """Absolute path without resolving symlinks. resolve() would hide a swap."""
+    text = os.path.abspath(os.fspath(path))
+    return Path(text)
+
+
 def within(path, parent):
     try:
-        path.resolve(strict=False).relative_to(parent.resolve(strict=False))
+        logical_path(path).relative_to(logical_path(parent))
         return True
     except ValueError:
         return False
+
+
+def lstat_existing(path):
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+
+
+def assert_no_symlink_chain(path):
+    current = Path(path.anchor)
+    saw_missing = False
+    for part in logical_path(path).parts[1:]:
+        if part in ("", ".", "..") or "\0" in part:
+            fail("invalid_path")
+        current = current / part
+        info = lstat_existing(current)
+        if info is None:
+            saw_missing = True
+            continue
+        if saw_missing:
+            fail("path_component_reappeared", part)
+        if stat.S_ISLNK(info.st_mode):
+            fail("symlink_path_refused", part)
+    return current
+
+
+def open_directory_nofollow(path):
+    flags = os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        fail("directory_open_refused")
+    info = os.fstat(fd)
+    if not stat.S_ISDIR(info.st_mode):
+        os.close(fd)
+        fail("required_directory_missing")
+    return fd, (info.st_dev, info.st_ino)
+
+
+def mkdir_at(parent_fd, name):
+    libc = ctypes.CDLL(None, use_errno=True)
+    libc.mkdirat.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+    libc.mkdirat.restype = ctypes.c_int
+    if libc.mkdirat(parent_fd, os.fsencode(name), 0o700) != 0:
+        err = ctypes.get_errno()
+        if err == errno.EEXIST:
+            fail("partial_output_exists")
+        fail("staging_mkdir_failed", errno.errorcode.get(err, "errno"))
+
+
+def identity_of(path):
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode):
+        fail("symlink_refused", path.name)
+    kind = "directory" if stat.S_ISDIR(info.st_mode) else "file" if stat.S_ISREG(info.st_mode) else None
+    if kind is None:
+        fail("unsupported_file_type")
+    return (kind, info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, stat.S_IMODE(info.st_mode))
+
+
+def directory_names(path):
+    names = []
+    try:
+        iterator = os.scandir(path)
+    except OSError:
+        fail("unreadable_directory")
+    with iterator as listing:
+        for entry in listing:
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
+                fail("symlink_refused", entry.name)
+            names.append(entry.name)
+    return tuple(sorted(names))
 
 
 def refuse_live(path, home=None):
@@ -161,21 +354,20 @@ def guard_path(value, exists, directory):
     path = Path(text)
     if not path.is_absolute():
         fail("absolute_path_required")
-    for part in (path, *path.parents):
-        if part.exists() or part.is_symlink():
-            if part.is_symlink():
-                fail("symlink_path_refused")
-            break
+    assert_no_symlink_chain(path)
+    info = lstat_existing(path)
     if exists:
-        if not path.exists():
+        if info is None:
             fail("required_path_missing")
-        if directory and not path.is_dir():
+        if stat.S_ISLNK(info.st_mode):
+            fail("symlink_path_refused")
+        if directory and not stat.S_ISDIR(info.st_mode):
             fail("required_directory_missing")
-        if not directory and not path.is_file():
+        if not directory and not stat.S_ISREG(info.st_mode):
             fail("required_file_missing")
-    elif path.exists() or path.is_symlink():
+    elif info is not None:
         fail("output_exists")
-    return path
+    return logical_path(path)
 
 
 def read_file(path):
@@ -241,13 +433,13 @@ def walk(root):
             path = Path(entry.path)
             rel = path.relative_to(root).as_posix()
             check_relative(rel)
-            if entry.is_symlink():
+            info = entry.stat(follow_symlinks=False)
+            if stat.S_ISLNK(info.st_mode):
                 fail("symlink_refused", rel)
-            if entry.is_dir(follow_symlinks=False):
+            if stat.S_ISDIR(info.st_mode):
                 directories.append(rel)
                 visit(path)
-            elif entry.is_file(follow_symlinks=False):
-                info = path.lstat()
+            elif stat.S_ISREG(info.st_mode):
                 if info.st_nlink != 1:
                     fail("hardlink_refused", rel)
                 files.append(rel)
@@ -376,6 +568,15 @@ def copy_xattrs(source, target):
     return preserved, skipped, "READ"
 
 
+def require_preserved_xattrs(skipped):
+    """Apple names cannot be stored on this Linux probe; any other miss fails."""
+    for name in skipped:
+        apple = name.startswith("com.apple.")
+        if sys.platform != "darwin" and apple:
+            continue
+        fail("xattr_not_preserved", name)
+
+
 def write_bytes(path, data, mode):
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -394,8 +595,11 @@ def snapshot_database(source, dest, scratch_dir):
             continue
         if item.is_symlink() or not item.is_file():
             fail("unsafe_database_sidecar", suffix or "main")
+        before_identity = identity_of(item)
         target = Path(str(scratch) + suffix)
         write_bytes(target, read_file(item), 0o600)
+        if identity_of(item) != before_identity:
+            fail("source_database_changed_during_snapshot")
         if suffix:
             sidecars.append(suffix)
     before = file_sha(source)
@@ -535,6 +739,13 @@ def support_decision(rel):
         return "include", APP_SUPPORT_EXACT[rel]
     if CORRUPTED_LIBRARY.fullmatch(rel):
         return "include", "rhythm_library_quarantine_copy"
+    parts = rel.split("/")
+    # Host quarantine of imported module restore jobs lives in the Rhythm
+    # support tree. It is current receiver state, not a source archive.
+    if parts[0] == "IntegratedRecovery" and (len(parts) == 1 or parts[1] in ("Health", "Footprints")):
+        return "include", "receiver_integrated_recovery_quarantine"
+    if parts[0] == "IntegratedRecovery":
+        fail("unclassified_application_support_entry", rel)
     fail("unclassified_application_support_entry", rel)
 
 
@@ -584,6 +795,8 @@ def business_raw_count(path, reason):
         fail("immutable_receipt_contains_rawbase64")
     if path.name == "explicit-absences.json":
         fail("absence_file_contains_rawbase64")
+    if reason == "receiver_integrated_recovery_quarantine":
+        fail("rawbase64_ownership_unresolved", path.name)
     blocked = {"authority", "active_owner.json", "receiver_archive"}
     if reason in blocked and path.name != "library.json":
         fail("immutable_record_contains_rawbase64", path.name)
@@ -699,7 +912,7 @@ def fsync_tree(root):
 
 
 def export_package(group, app_support, preferences_dir, plan_path, output,
-                   expect_plan_sha=None, failpoint=None, home=None):
+                   expect_plan_sha=None, failpoint=None, home=None, pre_commit_hook=None):
     migration = load_sibling("integrate_sources.py")
     upgrade = load_sibling("upgrade_data.py")
     group = guard_path(group, True, True)
@@ -785,16 +998,19 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             fail("recovery_staging_lock_busy")
+        source_hashes, listings = capture_source_snapshot(
+            group, app_support, preferences_dir, included, preferences, excluded)
+        parent_fd, parent_identity = open_directory_nofollow(output.parent)
         try:
-            staging.mkdir(mode=0o700)
+            mkdir_at(parent_fd, staging.name)
             write_bytes(staging / "STAGING.json", canonical({
                 "kind": "ReceiverWhitelistRecoveryStaging", "pid": os.getpid(), "createdAt": now()}), 0o600)
             payload = staging / "payload"
             payload.mkdir(mode=0o700)
             notes = materialize(group, app_support, preferences, included, payload)
             archive = sealed_archive(payload)
-            bind_shipped_hashes(included, preferences, payload)
             runtime = runtime_report(payload, upgrade, migration)
+            bind_shipped_hashes(included, preferences, payload)
             policy = annotate_quarantine(platform_policy(), notes)
             exclusion_body = {"schemaVersion": SCHEMA, "entries": excluded}
             whitelist_body = {"schemaVersion": SCHEMA, "entries": whitelist_entries(included, preferences)}
@@ -805,29 +1021,87 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
             write_bytes(manifests / "metadata-policy.json", canonical(policy), 0o600)
             write_bytes(manifests / "archive-tree.json", canonical(archive), 0o600)
             receipt_body = build_receipt(
-                phase="export", authority_bytes=authority_bytes, plan_file_sha=plan_file_sha,
+                authority_bytes=authority_bytes, plan_file_sha=plan_file_sha,
                 plan_canonical=plan_canonical, receipt_bytes=receipt_bytes,
                 whitelist_sha=sha(canonical(whitelist_body)),
                 exclusion_sha=sha(canonical(exclusion_body)),
                 archive_sha=sha(canonical(archive)), policy=policy,
                 business_raw=business_raw, runtime=runtime, notes=notes,
-                widget_pending="library.json.widget-pending" in included["support"])
+                widget_pending="library.json.widget-pending" in included["support"],
+                expect_plan_sha=expect_plan_sha)
             write_bytes(manifests / "receipt.json", canonical(receipt_body), 0o600)
             write_bytes(staging / "PACKAGE-COMPLETE", b"isolated-package\n", 0o600)
             fsync_tree(staging)
+            if pre_commit_hook is not None:
+                pre_commit_hook()
+            recheck_source_snapshot(source_hashes, listings)
             if failpoint == "before_commit":
                 fail("failpoint_before_commit")
-            os.rename(staging, output)
+            if os.fstat(parent_fd).st_ino != parent_identity[1] or os.fstat(parent_fd).st_dev != parent_identity[0]:
+                fail("path_identity_changed")
+            try:
+                probe = os.open(output.name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=parent_fd)
+            except FileNotFoundError:
+                probe = -1
+            except OSError:
+                fail("symlink_path_refused")
+            if probe >= 0:
+                os.close(probe)
+                fail("output_exists")
+            os.rename(staging.name, output.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         except BaseException:
             discard_staging(staging)
             raise
+        finally:
+            os.close(parent_fd)
     finally:
         os.close(lock_fd)
     require_bytes_stable(plan_path, plan_file_sha)
     require_bytes_stable(group / "Integration/authority.json", sha(authority_bytes))
     require_bytes_stable(receipt_path, sha(receipt_bytes))
-    return public_summary("exported", output, business_raw, policy, plan_canonical,
-                          sha(authority_bytes), sha(receipt_bytes))
+    return public_summary("exported", output, policy)
+
+
+def capture_source_snapshot(group, app_support, preferences_dir, included, preferences, excluded):
+    hashes = {}
+    listings = {str(group): directory_names(group), str(app_support): directory_names(app_support),
+                str(preferences_dir): directory_names(preferences_dir)}
+    for rel, item in included["group"].items():
+        path = group / rel
+        if item.get("directory"):
+            listings[str(path)] = directory_names(path)
+        else:
+            hashes[str(path)] = item["sha256"]
+    for rel, item in included["support"].items():
+        path = app_support / rel
+        if item.get("directory"):
+            listings[str(path)] = directory_names(path)
+        else:
+            hashes[str(path)] = item["sha256"]
+    for domain, item in preferences.items():
+        hashes[str(preferences_dir / (domain + ".plist"))] = item["sha256"]
+    for record in excluded:
+        if record.get("type") != "file" or "sha256" not in record:
+            continue
+        if not record["path"].startswith("GroupContainer/"):
+            continue
+        hashes[str(group / record["path"][len("GroupContainer/"):])] = record["sha256"]
+    return hashes, listings
+
+
+def recheck_source_snapshot(hashes, listings):
+    for text, digest in hashes.items():
+        path = Path(text)
+        if lstat_existing(path) is None or path.is_symlink():
+            fail("source_changed_during_read")
+        if file_sha(path) != digest:
+            fail("source_changed_during_read")
+    for text, names in listings.items():
+        path = Path(text)
+        if lstat_existing(path) is None or path.is_symlink():
+            fail("source_tree_changed")
+        if directory_names(path) != names:
+            fail("source_tree_changed")
 
 
 def collect_sources(group, app_support, active, authority_bytes, plan_canonical):
@@ -861,14 +1135,18 @@ def collect_sources(group, app_support, active, authority_bytes, plan_canonical)
             if reason == "foreign_transaction_record" and path.suffix == ".json" and b'"rawBase64"' in read_file(path):
                 fail("rawbase64_ownership_unresolved", rel)
     support_dirs, support_files = walk(app_support)
-    if support_dirs:
-        fail("unclassified_application_support_entry", support_dirs[0])
     included_support = {}
-    for rel in support_files:
+    for rel in support_dirs + support_files:
         action, reason = support_decision(rel)
         path = app_support / rel
-        business_raw += business_raw_count(path, reason)
-        included_support[rel] = {"reason": reason, "sha256": file_sha(path), "bytes": path.stat().st_size}
+        kind, _ = lstat_kind(path)
+        if action != "include":
+            fail("unclassified_application_support_entry", rel)
+        if kind == "file":
+            business_raw += business_raw_count(path, reason)
+            included_support[rel] = {"reason": reason, "sha256": file_sha(path), "bytes": path.stat().st_size}
+        else:
+            included_support[rel] = {"reason": reason, "directory": True}
     if sha(read_file(group / "Integration/authority.json")) != sha(authority_bytes):
         fail("source_changed_during_read")
     if parse_json(authority_bytes).get("planSHA256") != plan_canonical:
@@ -933,6 +1211,15 @@ def whitelist_entries(included, preferences):
     for domain, item in preferences.items():
         rows.append({"path": "Preferences/" + domain + ".plist", "reason": "preference_domain",
                      "sha256": item["sha256"], "bytes": len(item["bytes"])})
+    for name, reason in GROUP_FILES.items():
+        if name not in included["group"]:
+            rows.append({"path": "GroupContainer/" + name, "absent": True, "reason": reason,
+                         "absenceIsExplicit": True})
+    if not any(rel == "IntegratedRecovery" or rel.startswith("IntegratedRecovery/")
+               for rel in included["support"]):
+        rows.append({"path": "ApplicationSupport/GaoSeries/Rhythm/IntegratedRecovery",
+                     "absent": True, "reason": "receiver_integrated_recovery_quarantine",
+                     "absenceIsExplicit": True})
     return rows
 
 
@@ -943,9 +1230,13 @@ def materialize(group, app_support, preferences, included, payload):
         if item.get("directory"):
             continue
         mapping.append((group / rel, payload / "GroupContainer" / rel, False))
-    for rel in included["support"]:
+    for rel, item in included["support"].items():
+        if item.get("directory"):
+            continue
         mapping.append((app_support / rel, payload / "ApplicationSupport/GaoSeries/Rhythm" / rel, False))
     directories = [payload / "GroupContainer" / rel for rel, item in included["group"].items() if item.get("directory")]
+    directories.extend(payload / "ApplicationSupport/GaoSeries/Rhythm" / rel
+                       for rel, item in included["support"].items() if item.get("directory"))
     directories.extend([
         payload / "ApplicationSupport", payload / "ApplicationSupport/GaoSeries",
         payload / "ApplicationSupport/GaoSeries/Rhythm", payload / "Preferences",
@@ -960,6 +1251,7 @@ def materialize(group, app_support, preferences, included, payload):
             if rel in CANONICAL:
                 summary, sidecars = snapshot_database(source, target, scratch_dir)
                 preserved, skipped, status = copy_xattrs(source, target)
+                require_preserved_xattrs(skipped)
                 os.chmod(target, meta["mode"], follow_symlinks=False)
                 os.utime(target, ns=(meta["mtimeNs"], meta["mtimeNs"]), follow_symlinks=False)
                 notes.append({"source": rel, "logical": summary, "sidecarsFolded": sidecars,
@@ -970,8 +1262,7 @@ def materialize(group, app_support, preferences, included, payload):
                 write_bytes(target, read_file(source), 0o600)
                 os.chmod(target, meta["mode"], follow_symlinks=False)
                 preserved, skipped, status = copy_xattrs(source, target)
-                if skipped and sys.platform == "darwin":
-                    fail("xattr_not_preserved")
+                require_preserved_xattrs(skipped)
                 os.utime(target, ns=(meta["mtimeNs"], meta["mtimeNs"]), follow_symlinks=False)
                 if file_sha(target) != meta["sha256"]:
                     fail("copy_checksum_mismatch")
@@ -983,7 +1274,8 @@ def materialize(group, app_support, preferences, included, payload):
         if source is not None:
             meta = metadata_of(source)
             os.chmod(directory, meta["mode"], follow_symlinks=False)
-            copy_xattrs(source, directory)
+            _preserved, skipped, _status = copy_xattrs(source, directory)
+            require_preserved_xattrs(skipped)
             os.utime(directory, ns=(meta["mtimeNs"], meta["mtimeNs"]), follow_symlinks=False)
         else:
             os.chmod(directory, 0o700, follow_symlinks=False)
@@ -998,6 +1290,9 @@ def directory_source(directory, payload, group, app_support):
         return group / rel[len("GroupContainer/"):]
     if rel == "ApplicationSupport/GaoSeries/Rhythm":
         return app_support
+    prefix = "ApplicationSupport/GaoSeries/Rhythm/"
+    if rel.startswith(prefix):
+        return app_support / rel[len(prefix):]
     return None
 
 
@@ -1016,6 +1311,8 @@ def bind_shipped_hashes(included, preferences, payload):
         elif actual != item["sha256"]:
             fail("copy_checksum_mismatch", rel)
     for rel, item in included["support"].items():
+        if item.get("directory"):
+            continue
         actual = file_sha(payload / "ApplicationSupport/GaoSeries/Rhythm" / rel)
         if actual != item["sha256"]:
             fail("copy_checksum_mismatch", rel)
@@ -1113,67 +1410,72 @@ def _runtime_report(payload, upgrade, migration):
     }
 
 
-def build_receipt(phase, authority_bytes, plan_file_sha, plan_canonical, receipt_bytes,
+def build_receipt(authority_bytes, plan_file_sha, plan_canonical, receipt_bytes,
                   whitelist_sha, exclusion_sha, archive_sha, policy, business_raw, runtime,
-                  notes, widget_pending):
+                  notes, widget_pending, expect_plan_sha):
+    root_fields = seal_root_fields(root_actual_current_recovery_fields())
+    preparation = seal_preparation(preparation_contract())
     return {
         "schemaVersion": SCHEMA,
-        "kind": KIND + "Receipt",
-        "phase": phase,
-        "captureAt": now(),
-        "restoreCheckAt": "NOT_EXECUTED",
-        "rootMaintenanceEvidence": "NOT_EXECUTED",
-        "rootMaintenanceInterface": "unknown",
-        "locksNotAcquired": [
-            ".rhythm-integration-writers.lock", ".rhythm-integration-maintenance.json",
-            "build_lease", "foreground_lease"],
-        "packageStagingLock": "acquired_not_root_maintenance",
-        "whitelistAndExclusionManifestSHA256": sha(canonical({"whitelist": whitelist_sha, "exclusion": exclusion_sha})),
-        "authoritySHA256": sha(authority_bytes),
-        "suppliedPlanFileSHA256": plan_file_sha,
-        "suppliedPlanCanonicalSHA256": plan_canonical,
-        "suppliedPlanMatchesAuthorityPlanSHA256": True,
-        "productionPlanByteHashVerified": "NOT_EXECUTED",
-        "productionPlanIdentityDocument": "missing_reports_rootcutover_migration_plan",
-        "originalTransactionReceiptSHA256": sha(receipt_bytes),
-        "payloadMetadataPolicy": policy,
-        "actualArchiveTreeSHA256": archive_sha,
-        "isolatedRestoreTargetIdentity": None,
-        "pureSourceRawExcludedFromRecoverablePackage": True,
-        "businessRawBase64Preserved": business_raw,
-        "sqliteSnapshotNotes": notes,
-        "widgetPublicationPending": widget_pending,
-        "runtime": runtime,
-        "reMigration": False,
-        "reActivation": False,
-        "activeBusinessRolledBack": False,
-        "activeWrite": False,
-        "realUserDataTouched": False,
+        "kind": "SyntheticReceiverWhitelistPackageRecord",
+        "notRootEvidence": True,
         "realRecoveryCompleted": False,
-        "scope": "isolated_noindex_only",
-        "receiptSchemaAlignment": "partial_names_from_20261105_brief_ellipsis_not_loaded",
-        "unseenRootActualCurrentRecoveryFields": "REQUIRED_DOCUMENT",
+        "activeWrite": False,
+        "preparationContract": preparation,
+        "rootActualCurrentRecoveryFields": root_fields,
+        "syntheticObservation": {
+            "syntheticOnly": True,
+            "notRootEvidence": True,
+            "semanticVerification": "UNVERIFIED",
+            "currentReaders": "UNVERIFIED",
+            "gameProgress": "UNVERIFIED",
+            "dedup": "UNVERIFIED",
+            "fourPreferenceValues": "UNVERIFIED",
+            "runtimeOnlyAgainstProductionPlan": "UNVERIFIED",
+            "macQuarantineFlagsAcl": "UNVERIFIED",
+            "reason": "synthetic_fixture_or_file_presence_is_not_real_evidence",
+            "structuralArchiveTreeSHA256": archive_sha,
+            "structuralWhitelistSHA256": whitelist_sha,
+            "structuralExclusionSHA256": exclusion_sha,
+            "suppliedPlanFileSHA256": plan_file_sha,
+            "suppliedPlanCanonicalSHA256": plan_canonical,
+            "suppliedPlanMatchesFixtureAuthority": True,
+            "callerExpectedPlanSHA256": expect_plan_sha,
+            "callerExpectationIsNotProductionProof": True,
+            "originalTransactionReceiptSHA256": sha(receipt_bytes),
+            "authoritySHA256": sha(authority_bytes),
+            "businessRawBase64PointerCount": business_raw,
+            "pureSourceRawExcludedFromThisSyntheticPackage": True,
+            "sqliteSnapshotNotes": notes,
+            "widgetPublicationPending": widget_pending,
+            "preferenceSHA256": runtime["preferences"],
+            "libraryGameStateSHA256": runtime["rhythmLibrary"]["gameStateSHA256"],
+            "structuralReadersGate": "passed_on_these_bytes_not_root_evidence",
+            "payloadMetadataPolicy": policy,
+            "isolatedRestoreCheckedAt": None,
+            "syntheticArchiveToRestoreStructuralMatch": None,
+            "packageStagingLock": "acquired_not_root_maintenance",
+            "locksNotAcquired": [
+                ".rhythm-integration-writers.lock", ".rhythm-integration-maintenance.json",
+                "build_lease", "foreground_lease"],
+        },
     }
 
 
-def public_summary(status, path, business_raw, policy, plan_canonical, authority_sha, receipt_sha):
+def public_summary(status, path, policy):
     return {
         "status": status,
         "package": path.name,
-        "businessRawBase64Preserved": business_raw,
-        "pureSourceRawExcludedFromRecoverablePackage": True,
-        "reMigration": False,
-        "reActivation": False,
-        "activeBusinessRolledBack": False,
+        "notRootEvidence": True,
+        "realRecoveryCompleted": False,
         "activeWrite": False,
-        "rootMaintenanceEvidence": "NOT_EXECUTED",
-        "productionPlanByteHashVerified": "NOT_EXECUTED",
+        "liveRootReadImplemented": False,
+        "productionPlanByteHashVerified": None,
+        "productionPlanFileSHA256": PRODUCTION_PLAN_FILE_SHA256,
+        "rootActualCurrentRecoveryFieldsStatus": "NOT_EXECUTED",
+        "semanticVerification": "UNVERIFIED",
         "macosQuarantineFidelity": policy["macosQuarantineFidelity"],
         "appleMetadata": policy["appleMetadata"],
-        "planCanonicalSHA256": plan_canonical,
-        "authoritySHA256": authority_sha,
-        "originalTransactionReceiptSHA256": receipt_sha,
-        "realRecoveryCompleted": False,
         "scope": "isolated_noindex_only",
     }
 
@@ -1192,16 +1494,23 @@ def load_package(package):
     whitelist = parse_json(read_file(manifests / "whitelist.json"))
     exclusions = parse_json(read_file(manifests / "exclusions.json"))
     policy = parse_json(read_file(manifests / "metadata-policy.json"))
-    if sha(canonical(archive)) != receipt.get("actualArchiveTreeSHA256"):
+    if receipt.get("notRootEvidence") is not True or receipt.get("realRecoveryCompleted") is not False:
+        fail("receipt_missing_synthetic_boundary")
+    if receipt.get("activeWrite") is not False:
+        fail("receipt_claims_forbidden_action")
+    seal_root_fields(receipt.get("rootActualCurrentRecoveryFields"))
+    seal_preparation(receipt.get("preparationContract"))
+    observation = receipt.get("syntheticObservation")
+    if not isinstance(observation, dict) or observation.get("notRootEvidence") is not True:
+        fail("receipt_missing_synthetic_boundary")
+    if observation.get("semanticVerification") != "UNVERIFIED":
+        fail("synthetic_observation_claims_real_verification")
+    if sha(canonical(archive)) != observation.get("structuralArchiveTreeSHA256"):
         fail("archive_tree_hash_mismatch")
-    if receipt.get("realRecoveryCompleted") is not False or receipt.get("reMigration") is not False:
-        fail("receipt_claims_forbidden_action")
-    if receipt.get("reActivation") is not False or receipt.get("activeBusinessRolledBack") is not False:
-        fail("receipt_claims_forbidden_action")
-    if receipt.get("productionPlanByteHashVerified") not in ("NOT_EXECUTED", None, False):
-        fail("receipt_claims_unexecuted_proof")
-    if receipt.get("rootMaintenanceEvidence") != "NOT_EXECUTED":
-        fail("receipt_claims_root_maintenance")
+    if sha(canonical(whitelist)) != observation.get("structuralWhitelistSHA256"):
+        fail("forged_whitelist_manifest")
+    if sha(canonical(exclusions)) != observation.get("structuralExclusionSHA256"):
+        fail("forged_exclusion_manifest")
     payload = package / "payload"
     actual = sealed_archive(payload)
     if actual["nodes"] != archive["nodes"]:
@@ -1232,11 +1541,12 @@ def verify_package(package, plan_path, restored=None, source_group=None, home=No
     refuse_live(plan_path, home)
     plan = migration.load_plan(plan_path)
     plan_canonical = migration.sha(migration.canonical(plan))
-    if loaded["receipt"].get("suppliedPlanCanonicalSHA256") != plan_canonical:
+    observation = loaded["receipt"]["syntheticObservation"]
+    if observation.get("suppliedPlanCanonicalSHA256") != plan_canonical:
         fail("package_plan_mismatch")
     payload_group = loaded["payload"] / "GroupContainer"
     authority_bytes, authority = read_authority(payload_group, migration)
-    if sha(authority_bytes) != loaded["receipt"]["authoritySHA256"]:
+    if sha(authority_bytes) != observation["authoritySHA256"]:
         fail("authority_hash_mismatch")
     if authority["planSHA256"] != plan_canonical or authority["transactionID"] != plan["transactionID"]:
         fail("authority_plan_mismatch")
@@ -1246,7 +1556,7 @@ def verify_package(package, plan_path, restored=None, source_group=None, home=No
     receipt_path = payload_group / "Integration/Transactions.noindex" / active / "receipt.json"
     owner_path = payload_group / "Integration/Transactions.noindex" / active / "owner.json"
     receipt_bytes = read_file(receipt_path)
-    if sha(receipt_bytes) != loaded["receipt"]["originalTransactionReceiptSHA256"]:
+    if sha(receipt_bytes) != observation["originalTransactionReceiptSHA256"]:
         fail("transaction_receipt_byte_mismatch")
     if b'"rawBase64"' in receipt_bytes:
         fail("immutable_receipt_contains_rawbase64")
@@ -1254,10 +1564,10 @@ def verify_package(package, plan_path, restored=None, source_group=None, home=No
     if owner != {"transactionID": active, "planSHA256": plan_canonical}:
         fail("owner_json_not_bound")
     runtime = runtime_report(loaded["payload"], upgrade, migration)
-    if runtime["preferences"] != loaded["receipt"]["runtime"]["preferences"]:
+    if runtime["preferences"] != observation["preferenceSHA256"]:
         fail("preference_digest_mismatch")
-    if runtime["rhythmLibrary"]["gameStateSHA256"] != loaded["receipt"]["runtime"]["rhythmLibrary"]["gameStateSHA256"]:
-        fail("game_progress_mismatch")
+    if runtime["rhythmLibrary"]["gameStateSHA256"] != observation["libraryGameStateSHA256"]:
+        fail("synthetic_library_digest_mismatch")
     scan_package_raw(loaded["payload"])
     runtime_only = "NOT_EXECUTED"
     if source_group is not None:
@@ -1279,16 +1589,25 @@ def verify_package(package, plan_path, restored=None, source_group=None, home=No
         check = parse_json(read_file(restored / "recovery-receipt.json"))
         if check.get("realRecoveryCompleted") is not False or check.get("activeWrite") is not False:
             fail("restore_receipt_claims_active_write")
+        seal_root_fields(check.get("rootActualCurrentRecoveryFields"))
+        if check.get("syntheticObservation", {}).get("macQuarantineFlagsAcl") != "UNVERIFIED":
+            fail("restore_claims_mac_metadata_fidelity")
+        if check.get("syntheticObservation", {}).get("syntheticArchiveToRestoreStructuralMatch") is not True:
+            fail("restore_structural_match_missing")
     return {
         "status": "verified",
+        "notRootEvidence": True,
         "realRecoveryCompleted": False,
-        "integrateSourcesRuntimeOnly": runtime_only,
-        "equivalentReadersApplied": True,
+        "liveRootReadImplemented": False,
+        "productionPlanByteHashVerified": None,
+        "semanticVerification": "UNVERIFIED",
+        "currentReadersCompatible": None,
+        "fourPreferenceDomainsPresenceAndValuesVerified": None,
+        "attachmentsAndGameProgressVerified": None,
+        "sharedSleepSeedTombstoneRequestRewardDedupVerified": None,
+        "runtimeOnlyCompatibleWithUnchangedRootPlanAndReceipt": None,
+        "syntheticFixtureRuntimeOnly": runtime_only,
         "isolatedRestoreTargetIdentity": restored_identity,
-        "businessRawBase64Preserved": loaded["receipt"]["businessRawBase64Preserved"],
-        "pureSourceRawExcludedFromRecoverablePackage": True,
-        "productionPlanByteHashVerified": "NOT_EXECUTED",
-        "rootMaintenanceEvidence": "NOT_EXECUTED",
         "preferenceValuesEmitted": False,
     }
 
@@ -1372,15 +1691,17 @@ def restore_package(package, target, failpoint=None, home=None):
         compare_trees(loaded["archive"], expected)
         info_parent = staging.lstat()
         receipt = dict(loaded["receipt"])
-        receipt["phase"] = "restore-check"
-        receipt["restoreCheckAt"] = now()
-        receipt["isolatedRestoreTargetIdentity"] = {"device": info_parent.st_dev, "inode": info_parent.st_ino,
-                                                     "nameEndsWithNoindex": True, "preexistingGroupRequired": False}
+        seal_root_fields(receipt["rootActualCurrentRecoveryFields"])
+        observation = dict(receipt["syntheticObservation"])
+        observation["isolatedRestoreCheckedAt"] = now()
+        observation["syntheticArchiveToRestoreStructuralMatch"] = True
+        observation["macQuarantineFlagsAcl"] = "UNVERIFIED"
+        observation["isolatedRestoreTargetDevice"] = info_parent.st_dev
+        observation["isolatedRestoreTargetInode"] = info_parent.st_ino
+        observation["preexistingGroupRequired"] = False
+        receipt["syntheticObservation"] = observation
         receipt["realRecoveryCompleted"] = False
         receipt["activeWrite"] = False
-        receipt["reMigration"] = False
-        receipt["reActivation"] = False
-        receipt["activeBusinessRolledBack"] = False
         write_bytes(staging / "recovery-receipt.json", canonical(receipt), 0o600)
         write_bytes(staging / "RESTORE-COMPLETE", b"isolated-restore\n", 0o600)
         fsync_tree(staging)

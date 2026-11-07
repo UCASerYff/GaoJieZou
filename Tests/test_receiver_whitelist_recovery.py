@@ -245,9 +245,28 @@ class RecoveryTests(unittest.TestCase):
         summary = self.world.export(package)
         self.assertFalse(summary["realRecoveryCompleted"])
         self.assertFalse(summary["activeWrite"])
-        self.assertEqual(summary["rootMaintenanceEvidence"], "NOT_EXECUTED")
-        self.assertEqual(summary["productionPlanByteHashVerified"], "NOT_EXECUTED")
-        self.assertGreaterEqual(summary["businessRawBase64Preserved"], 1)
+        self.assertFalse(summary["liveRootReadImplemented"])
+        self.assertIsNone(summary["productionPlanByteHashVerified"])
+        self.assertEqual(summary["productionPlanFileSHA256"], tool.PRODUCTION_PLAN_FILE_SHA256)
+        self.assertEqual(summary["semanticVerification"], "UNVERIFIED")
+        package_receipt = json.loads((package / "manifests/receipt.json").read_text())
+        root_fields = package_receipt["rootActualCurrentRecoveryFields"]
+        self.assertEqual(set(root_fields), set(tool.ROOT_FIELD_ORDER))
+        self.assertEqual(list(tool.seal_root_fields(root_fields)), list(tool.ROOT_FIELD_ORDER))
+        self.assertEqual(len(root_fields), 25)
+        self.assertEqual(root_fields["status"], "NOT_EXECUTED")
+        self.assertIsNone(root_fields["productionPlanByteHashVerified"])
+        self.assertIsNone(root_fields["currentReadersCompatible"])
+        self.assertIsNone(root_fields["fourPreferenceDomainsPresenceAndValuesVerified"])
+        self.assertIsNone(root_fields["attachmentsAndGameProgressVerified"])
+        self.assertIsNone(root_fields["sharedSleepSeedTombstoneRequestRewardDedupVerified"])
+        self.assertFalse(root_fields["reMigrationPerformed"])
+        self.assertFalse(root_fields["reActivationPerformed"])
+        self.assertFalse(root_fields["activeBusinessRolledBack"])
+        self.assertGreaterEqual(package_receipt["syntheticObservation"]["businessRawBase64PointerCount"], 1)
+        self.assertEqual(package_receipt["syntheticObservation"]["semanticVerification"], "UNVERIFIED")
+        self.assertFalse(package_receipt["preparationContract"]["executeAllowed"])
+        self.assertFalse(package_receipt["preparationContract"]["readOnlyCapture"]["implemented"])
         self.assertEqual(before["plan"], self.world.plan_path.read_bytes())
         self.assertEqual(before["authority"], (self.world.group / "Integration/authority.json").read_bytes())
         self.assertEqual(before["receipt"], (self.world.group / "Integration/Transactions.noindex/receiver-tx-1/receipt.json").read_bytes())
@@ -300,17 +319,22 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual((target / "ApplicationSupport/GaoSeries/Rhythm/library.json").read_bytes(),
                          (self.world.support / "library.json").read_bytes())
         checked = tool.verify_package(package, self.world.plan_path, restored=target, source_group=self.world.group)
-        self.assertEqual(checked["integrateSourcesRuntimeOnly"]["status"], "active")
-        self.assertFalse(checked["integrateSourcesRuntimeOnly"]["sourceArchivesChecked"])
-        self.assertTrue(checked["equivalentReadersApplied"])
+        self.assertEqual(checked["syntheticFixtureRuntimeOnly"]["status"], "active")
+        self.assertFalse(checked["syntheticFixtureRuntimeOnly"]["sourceArchivesChecked"])
+        self.assertIsNone(checked["currentReadersCompatible"])
+        self.assertIsNone(checked["runtimeOnlyCompatibleWithUnchangedRootPlanAndReceipt"])
+        self.assertEqual(checked["semanticVerification"], "UNVERIFIED")
         self.assertFalse(checked["realRecoveryCompleted"])
-        self.assertEqual(checked["productionPlanByteHashVerified"], "NOT_EXECUTED")
+        self.assertIsNone(checked["productionPlanByteHashVerified"])
         receipt = json.loads((target / "recovery-receipt.json").read_text())
-        self.assertFalse(receipt["reMigration"])
-        self.assertFalse(receipt["reActivation"])
-        self.assertFalse(receipt["activeBusinessRolledBack"])
+        self.assertIsNone(receipt["rootActualCurrentRecoveryFields"]["restoreCheckAt"])
+        self.assertIsNone(receipt["rootActualCurrentRecoveryFields"]["actualArchiveToRestoreMetadataExact"])
+        self.assertFalse(receipt["rootActualCurrentRecoveryFields"]["reMigrationPerformed"])
+        self.assertFalse(receipt["rootActualCurrentRecoveryFields"]["reActivationPerformed"])
+        self.assertFalse(receipt["rootActualCurrentRecoveryFields"]["activeBusinessRolledBack"])
         self.assertFalse(receipt["realRecoveryCompleted"])
-        self.assertNotEqual(receipt["restoreCheckAt"], "NOT_EXECUTED")
+        self.assertIsNotNone(receipt["syntheticObservation"]["isolatedRestoreCheckedAt"])
+        self.assertEqual(receipt["syntheticObservation"]["macQuarantineFlagsAcl"], "UNVERIFIED")
         package_receipt = (package / "manifests/receipt.json").read_bytes()
         self.assertEqual((package / "manifests/receipt.json").read_bytes(), package_receipt)
 
@@ -455,6 +479,78 @@ class RecoveryTests(unittest.TestCase):
         rejected = subprocess.run([sys.executable, str(ROOT / "scripts/receiver_whitelist_recovery.py"), "apply"],
                                   check=False, capture_output=True, text=True)
         self.assertNotEqual(rejected.returncode, 0)
+
+    def test_adversarial_races_whitelist_forgery_and_recovery_quarantine(self):
+        link_parent = self.base / "via-link"
+        real_parent = self.base / "real-parent"
+        real_parent.mkdir()
+        link_parent.symlink_to(real_parent)
+        with self.assertRaises(tool.RecoveryError) as linked:
+            self.world.export(link_parent / "out.noindex")
+        self.assertEqual(linked.exception.code, "symlink_path_refused")
+        self.assertFalse((real_parent / "out.noindex").exists())
+        self.assertFalse((real_parent / "out.partial.noindex").exists())
+
+        partial = self.base / "package.partial.noindex"
+        partial.mkdir()
+        (partial / "STAGING.json").write_bytes(tool.canonical({
+            "kind": "ReceiverWhitelistRecoveryStaging", "pid": os.getpid() + 1, "createdAt": "x"}))
+        with self.assertRaises(tool.RecoveryError) as foreign:
+            self.world.export(self.base / "package.noindex")
+        self.assertEqual(foreign.exception.code, "partial_output_exists")
+        self.assertTrue((partial / "STAGING.json").is_file())
+        partial.joinpath("STAGING.json").unlink()
+        partial.rmdir()
+
+        quarantine = self.world.support / "IntegratedRecovery/Health/ImportedPending.noindex"
+        quarantine.mkdir(parents=True)
+        (quarantine / "job-pending.json").write_bytes(b'{"kept":"receiver-quarantine"}')
+        package = self.base / "package.noindex"
+
+        def mutate_library():
+            handle = (self.world.support / "library.json").open("ab")
+            handle.write(b"\n")
+            handle.close()
+
+        with self.assertRaises(tool.RecoveryError) as changed:
+            self.world.export(package, pre_commit_hook=mutate_library)
+        self.assertEqual(changed.exception.code, "source_changed_during_read")
+        self.assertFalse(package.exists())
+        self.assertFalse((self.base / "package.partial.noindex").exists())
+        original = (self.world.support / "library.json").read_bytes()
+        (self.world.support / "library.json").write_bytes(original[:-1])
+
+        self.world.export(package)
+        shipped = package / "payload/ApplicationSupport/GaoSeries/Rhythm/IntegratedRecovery/Health/ImportedPending.noindex/job-pending.json"
+        self.assertEqual(shipped.read_bytes(), b'{"kept":"receiver-quarantine"}')
+        whitelist = json.loads((package / "manifests/whitelist.json").read_text())
+        absent = [row["path"] for row in whitelist["entries"] if row.get("absent")]
+        self.assertIn("GroupContainer/widget-snapshot.json", absent)
+        self.assertNotIn("ApplicationSupport/GaoSeries/Rhythm/IntegratedRecovery", absent)
+        receipt = json.loads((package / "manifests/receipt.json").read_text())
+        receipt["rootActualCurrentRecoveryFields"]["productionPlanByteHashVerified"] = True
+        (package / "manifests/receipt.json").write_text(json.dumps(receipt))
+        with self.assertRaises(tool.RecoveryError) as forged:
+            tool.verify_package(package, self.world.plan_path)
+        self.assertEqual(forged.exception.code, "root_field_prefilled_true")
+        self.assertTrue((self.world.group / "Integration/authority.json").is_file())
+
+    def test_macos_probe_does_not_run_or_create_a_directory_by_default(self):
+        script = ROOT / "scripts/macos_synthetic_metadata_probe.py"
+        parent = Path(tempfile.gettempdir())
+        before = set(parent.glob("rhythm-macos-probe-*.noindex"))
+        idle = subprocess.run([sys.executable, str(script)], check=False, capture_output=True, text=True)
+        self.assertEqual(idle.returncode, 0, idle.stderr)
+        self.assertEqual(json.loads(idle.stdout)["status"], "not_run")
+        self.assertIsNone(json.loads(idle.stdout)["created"])
+        self.assertEqual(set(parent.glob("rhythm-macos-probe-*.noindex")), before)
+        if sys.platform != "darwin":
+            refused = subprocess.run([sys.executable, str(script), "--confirm-synthetic-macos-probe"],
+                                     check=False, capture_output=True, text=True)
+            self.assertEqual(refused.returncode, 2, refused.stderr)
+            self.assertEqual(json.loads(refused.stdout)["code"], "macos_probe_requires_darwin")
+            self.assertIsNone(json.loads(refused.stdout)["created"])
+            self.assertEqual(set(parent.glob("rhythm-macos-probe-*.noindex")), before)
 
 
 if __name__ == "__main__":
