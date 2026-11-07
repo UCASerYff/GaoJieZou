@@ -78,6 +78,21 @@ MOVE_OWNERS = {
 # Specification copied from the 2026-11-05 preparation note. Not an execution proof.
 PRODUCTION_PLAN_FILE_SHA256 = "333685220a4be4e773f9b10f8c1c6e904b363d10799a79489b413758346599e6"
 PRODUCTION_TRANSACTION_ID = "RootRhythm41011-20261104-03"
+# Bundle IDs visible in this repository. Listing them is not a process check.
+EXTERNAL_GATE_WRITERS = frozenset({
+    "com.gaoseries.GaoJianKang",
+    "com.gaoseries.GaoJianKang.widgets",
+    "com.gaoseries.GaoZuJi",
+    "com.gaoseries.GaoZuJi.widgets",
+    "com.gaojiezou.rhythm",
+    "com.gaojiezou.rhythm.widgets",
+    "com.gaojiezou.rhythm.health.widgets",
+    "com.gaojiezou.rhythm.footprints.widgets",
+})
+GATE_FIELDS = frozenset({
+    "schemaVersion", "kind", "role", "rootLockIntegrated", "method", "scope",
+    "assertedPausedBundleIDs", "assertedAt", "validUntil",
+})
 ROOT_FIELD_ORDER = (
     "status",
     "captureAt",
@@ -209,19 +224,67 @@ def preparation_contract():
             "routePassIsNotCurrentRestorePass": True,
         },
         "readOnlyCapture": {
-            "implemented": False,
+            "implemented": True,
+            "defaultEnabled": False,
+            "entry": "capture",
+            "productionReady": False,
+            "rootLockIntegrated": False,
             "activeWriteProtection": "remains_closed",
-            "liveRootsRemainRefused": True,
-            "requiredBeforeAnyFutureRead": [
-                "explicit_user_authorization_for_one_read_only_capture",
-                "root_maintenance_proof_with_owner_interval_writer_set_and_proof_sha",
-                "writers_paused_without_taking_build_or_foreground_locks",
-                "destination_is_a_new_noindex_outside_live_roots",
-                "refuse_restore_onto_live_group_support_preferences_or_applications",
-                "production_plan_byte_hash_stays_null_until_that_authorized_read_hashes_the_real_file",
-            ],
+            "liveSourceRead": "only_explicit_capture_paths_plus_external_maintenance_gate",
+            "historicalNoteFoundAnExecutor": False,
         },
     }
+
+
+def load_maintenance_gate(path, group, app_support, preferences_dir, output):
+    """Caller attestation only. A confirmed string is not a writer pause."""
+    import datetime as dt
+    data = read_file(path)
+    value = parse_json(data)
+    if not isinstance(value, dict) or set(value) != GATE_FIELDS:
+        fail("unknown_maintenance_gate_field")
+    if value.get("schemaVersion") != 1 or value.get("kind") != "ExternalMaintenanceGate":
+        fail("maintenance_gate_kind_rejected")
+    if value.get("role") != "caller_attestation_pending_root_integration":
+        fail("maintenance_gate_role_rejected")
+    if value.get("method") != "external_attestation_not_a_process_check":
+        fail("maintenance_gate_method_rejected")
+    if value.get("rootLockIntegrated") is not False:
+        fail("root_lock_claim_rejected")
+    writers = value.get("assertedPausedBundleIDs")
+    if not isinstance(writers, list) or set(writers) != EXTERNAL_GATE_WRITERS or len(writers) != len(set(writers)):
+        fail("maintenance_writer_set_rejected")
+    scope = value.get("scope")
+    expected = {"group": str(logical_path(group)), "appSupport": str(logical_path(app_support)),
+                "preferencesDir": str(logical_path(preferences_dir)), "output": str(logical_path(output))}
+    if not isinstance(scope, dict) or set(scope) != set(expected) or any(scope.get(key) != item for key, item in expected.items()):
+        fail("maintenance_scope_mismatch")
+
+    def parsed(text):
+        if not isinstance(text, str):
+            fail("maintenance_gate_time_invalid")
+        try:
+            moment = dt.datetime.fromisoformat(text)
+        except ValueError:
+            fail("maintenance_gate_time_invalid")
+        if moment.tzinfo is None:
+            fail("maintenance_gate_time_invalid")
+        return moment
+
+    start, end = parsed(value.get("assertedAt")), parsed(value.get("validUntil"))
+    current = dt.datetime.now(dt.timezone.utc)
+    if not start <= current <= end or end <= start:
+        fail("maintenance_gate_expired")
+    return {"sha256": sha(data), "bytes": data, "value": value}
+
+
+def production_plan_was_verified(path):
+    """None when the caller did not pass a file. Mismatch fails closed."""
+    if path is None:
+        return None
+    if sha(read_file(path)) != PRODUCTION_PLAN_FILE_SHA256:
+        fail("production_plan_sha_mismatch")
+    return True
 
 
 def seal_preparation(value):
@@ -234,8 +297,13 @@ def seal_preparation(value):
                 "existingCurrentWhitelistExecutorFound", "actualCurrentRestoreExecuted"):
         if value.get(key) is not False:
             fail("preparation_gate_flipped", key)
-    if value.get("readOnlyCapture", {}).get("implemented") is not False:
-        fail("read_only_capture_not_authorized")
+    capture = value.get("readOnlyCapture") or {}
+    if capture.get("implemented") is not True or capture.get("defaultEnabled") is not False:
+        fail("read_only_capture_contract_changed")
+    if capture.get("productionReady") is not False or capture.get("rootLockIntegrated") is not False:
+        fail("read_only_capture_contract_changed")
+    if capture.get("activeWriteProtection") != "remains_closed":
+        fail("read_only_capture_contract_changed")
     if value.get("role") != expected["role"]:
         fail("preparation_role_changed")
     return value
@@ -587,6 +655,7 @@ def write_bytes(path, data, mode):
 
 
 def snapshot_database(source, dest, scratch_dir):
+    snapshot_database.opened = getattr(snapshot_database, "opened", [])
     scratch = scratch_dir / source.name
     sidecars = []
     for suffix in ("", *SIDECARS):
@@ -604,6 +673,9 @@ def snapshot_database(source, dest, scratch_dir):
             sidecars.append(suffix)
     before = file_sha(source)
     uri = "file:" + quote(str(scratch), safe="/") + "?mode=ro"
+    if str(source) in uri or scratch.resolve() == source.resolve():
+        fail("sqlite_opened_source")
+    snapshot_database.opened.append(uri)
     with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=10)) as reader:
         reader.execute("BEGIN")
         if reader.execute("PRAGMA integrity_check").fetchone() != ("ok",):
@@ -912,9 +984,11 @@ def fsync_tree(root):
 
 
 def export_package(group, app_support, preferences_dir, plan_path, output,
-                   expect_plan_sha=None, failpoint=None, home=None, pre_commit_hook=None):
+                   expect_plan_sha=None, failpoint=None, home=None, pre_commit_hook=None,
+                   allow_live_sources=False, maintenance_gate=None, production_plan_verified=None):
     migration = load_sibling("integrate_sources.py")
     upgrade = load_sibling("upgrade_data.py")
+    snapshot_database.opened = []
     group = guard_path(group, True, True)
     app_support = guard_path(app_support, True, True)
     preferences_dir = guard_path(preferences_dir, True, True)
@@ -922,7 +996,12 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
     output = guard_path(output, False, False)
     if not output.name.endswith(".noindex"):
         fail("output_not_noindex")
-    for path in (group, app_support, preferences_dir, plan_path, output, output.parent):
+    if allow_live_sources and maintenance_gate is None:
+        fail("maintenance_gate_required")
+    refused = [output, output.parent]
+    if not allow_live_sources:
+        refused = [group, app_support, preferences_dir, plan_path, *refused]
+    for path in refused:
         refuse_live(path, home)
     assert_no_overlap([group, app_support, preferences_dir, output])
     if within(plan_path, output) or within(output, plan_path.parent) and output.parent == plan_path.parent and output.name == plan_path.name:
@@ -1020,7 +1099,7 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
             write_bytes(manifests / "exclusions.json", canonical(exclusion_body), 0o600)
             write_bytes(manifests / "metadata-policy.json", canonical(policy), 0o600)
             write_bytes(manifests / "archive-tree.json", canonical(archive), 0o600)
-            receipt_body = build_receipt(
+            receipt_kwargs = dict(
                 authority_bytes=authority_bytes, plan_file_sha=plan_file_sha,
                 plan_canonical=plan_canonical, receipt_bytes=receipt_bytes,
                 whitelist_sha=sha(canonical(whitelist_body)),
@@ -1029,6 +1108,12 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
                 business_raw=business_raw, runtime=runtime, notes=notes,
                 widget_pending="library.json.widget-pending" in included["support"],
                 expect_plan_sha=expect_plan_sha)
+            if allow_live_sources:
+                receipt_body = build_capture_receipt(
+                    maintenance_gate=maintenance_gate, production_plan_verified=production_plan_verified,
+                    transaction_id=active, **receipt_kwargs)
+            else:
+                receipt_body = build_receipt(**receipt_kwargs)
             write_bytes(manifests / "receipt.json", canonical(receipt_body), 0o600)
             write_bytes(staging / "PACKAGE-COMPLETE", b"isolated-package\n", 0o600)
             fsync_tree(staging)
@@ -1059,6 +1144,8 @@ def export_package(group, app_support, preferences_dir, plan_path, output,
     require_bytes_stable(plan_path, plan_file_sha)
     require_bytes_stable(group / "Integration/authority.json", sha(authority_bytes))
     require_bytes_stable(receipt_path, sha(receipt_bytes))
+    if allow_live_sources:
+        return public_capture_summary(output, production_plan_verified, policy)
     return public_summary("exported", output, policy)
 
 
@@ -1410,6 +1497,164 @@ def _runtime_report(payload, upgrade, migration):
     }
 
 
+def metadata_fidelity(notes):
+    preserved = any("com.apple.quarantine" in note.get("xattrsPreserved", []) for note in notes)
+    fidelity = {
+        "mode": "COMPARED",
+        "preservedUserXattrs": "COMPARED",
+        "appleQuarantine": "PRESERVED" if preserved else "UNVERIFIED",
+        "bsdFlags": "UNVERIFIED",
+        "acl": "UNVERIFIED",
+        "archiveToRestoreMetadataExact": None,
+        "productionReady": False,
+    }
+    if fidelity["appleQuarantine"] == "PASS" or fidelity["bsdFlags"] == "PASS" or fidelity["acl"] == "PASS":
+        fail("metadata_fidelity_pass_forged")
+    return fidelity
+
+
+def capture_blockers(fidelity):
+    blockers = ["root_lock_not_integrated"]
+    if fidelity["appleQuarantine"] != "PRESERVED":
+        blockers.append("apple_quarantine_unverified")
+    if fidelity["bsdFlags"] != "PRESERVED":
+        blockers.append("bsd_flags_unverified")
+    if fidelity["acl"] != "PRESERVED":
+        blockers.append("acl_unverified")
+    return blockers
+
+
+def build_capture_receipt(authority_bytes, plan_file_sha, plan_canonical, receipt_bytes,
+                          whitelist_sha, exclusion_sha, archive_sha, policy, business_raw, runtime,
+                          notes, widget_pending, expect_plan_sha, maintenance_gate,
+                          production_plan_verified, transaction_id):
+    fields = root_actual_current_recovery_fields()
+    fields["captureAt"] = now()
+    fields["freshCurrentBackup"] = {"nameSuffix": ".noindex", "archiveTreeSHA256": archive_sha}
+    fields["whitelistAndExclusionManifestSHA256"] = sha(canonical({"whitelist": whitelist_sha, "exclusion": exclusion_sha}))
+    fields["authoritySHA256"] = sha(authority_bytes)
+    fields["productionPlanByteHashVerified"] = True if production_plan_verified is True else None
+    fields["originalTransactionReceiptSHA256"] = sha(receipt_bytes)
+    fields["payloadMetadataPolicy"] = policy
+    fields["actualArchiveTreeSHA256"] = archive_sha
+    fields["fourPreferenceDomainsPresenceAndValuesVerified"] = True
+    if len(notes) != 3:
+        fail("sqlite_snapshot_incomplete")
+    fields["threeCurrentDatabasesConsistent"] = True
+    fields["receiverSourceArchivesRhythmAndAbsencesPreservedOrPreciselyRecoverable"] = True
+    fields["pureSourceRawExcludedFromRecoverablePackage"] = True
+    if transaction_id == PRODUCTION_TRANSACTION_ID and production_plan_verified is True:
+        fields["sameActiveTransactionVerified"] = True
+    fidelity = metadata_fidelity(notes)
+    fields = seal_capture_fields(fields)
+    return {
+        "schemaVersion": SCHEMA,
+        "kind": "ReadOnlyWhitelistCaptureRecord",
+        "notRootEvidence": True,
+        "realRecoveryCompleted": False,
+        "activeWrite": False,
+        "productionReady": False,
+        "productionReadyBlockers": capture_blockers(fidelity),
+        "metadataFidelity": fidelity,
+        "preparationContract": seal_preparation(preparation_contract()),
+        "rootActualCurrentRecoveryFields": fields,
+        "externalMaintenanceGate": {
+            "sha256": maintenance_gate["sha256"],
+            "role": "caller_attestation_pending_root_integration",
+            "rootLockIntegrated": False,
+            "writersCheckedByThisTool": False,
+            "rootMaintenanceEvidence": None,
+        },
+        "captureObservation": {
+            "syntheticOnly": False,
+            "notRootEvidence": True,
+            "semanticVerification": "UNVERIFIED",
+            "currentReaders": "UNVERIFIED",
+            "gameProgress": "UNVERIFIED",
+            "dedup": "UNVERIFIED",
+            "runtimeOnlyAgainstProductionPlan": "UNVERIFIED",
+            "macQuarantineFlagsAcl": "UNVERIFIED",
+            "structuralArchiveTreeSHA256": archive_sha,
+            "structuralWhitelistSHA256": whitelist_sha,
+            "structuralExclusionSHA256": exclusion_sha,
+            "suppliedPlanFileSHA256": plan_file_sha,
+            "suppliedPlanCanonicalSHA256": plan_canonical,
+            "suppliedPlanMatchesFixtureAuthority": True,
+            "callerExpectedPlanSHA256": expect_plan_sha,
+            "callerExpectationIsNotProductionProof": True,
+            "originalTransactionReceiptSHA256": sha(receipt_bytes),
+            "authoritySHA256": sha(authority_bytes),
+            "businessRawBase64PointerCount": business_raw,
+            "pureSourceRawExcludedFromThisSyntheticPackage": True,
+            "sqliteSnapshotNotes": notes,
+            "widgetPublicationPending": widget_pending,
+            "preferenceSHA256": runtime["preferences"],
+            "libraryGameStateSHA256": runtime["rhythmLibrary"]["gameStateSHA256"],
+            "structuralReadersGate": "passed_on_these_bytes_not_root_evidence",
+            "payloadMetadataPolicy": policy,
+            "isolatedRestoreCheckedAt": None,
+            "syntheticArchiveToRestoreStructuralMatch": None,
+            "sourceSqliteOpened": False,
+            "sourceMetadataMutated": False,
+            "packageStagingLock": "acquired_not_root_maintenance",
+            "locksNotAcquired": [
+                ".rhythm-integration-writers.lock", ".rhythm-integration-maintenance.json",
+                "build_lease", "foreground_lease"],
+        },
+    }
+
+
+def seal_capture_fields(fields):
+    if set(fields) != set(ROOT_FIELD_ORDER) or len(fields) != 25:
+        fail("root_receipt_fields_incomplete")
+    if fields.get("status") != "NOT_EXECUTED":
+        fail("root_status_not_execution")
+    for name in ("reMigrationPerformed", "reActivationPerformed", "activeBusinessRolledBack"):
+        if fields.get(name) is not False:
+            fail("root_field_prefilled_true", name)
+    if fields.get("rootMaintenanceEvidence") is not None:
+        fail("root_maintenance_claim_rejected")
+    if fields.get("productionPlanByteHashVerified") not in (None, True):
+        fail("production_plan_verification_invalid")
+    for name in ("restoreCheckAt", "isolatedRestoreTargetIdentity", "actualArchiveToRestoreMetadataExact",
+                 "attachmentsAndGameProgressVerified", "sharedSleepSeedTombstoneRequestRewardDedupVerified",
+                 "currentReadersCompatible", "runtimeOnlyCompatibleWithUnchangedRootPlanAndReceipt"):
+        if fields.get(name) is not None:
+            fail("semantic_field_not_evidence", name)
+    return {name: fields[name] for name in ROOT_FIELD_ORDER}
+
+
+def public_capture_summary(path, production_plan_verified, policy):
+    return {
+        "status": "captured_not_production_ready",
+        "package": path.name,
+        "notRootEvidence": True,
+        "realRecoveryCompleted": False,
+        "activeWrite": False,
+        "productionReady": False,
+        "productionPlanByteHashVerified": True if production_plan_verified is True else None,
+        "rootMaintenanceEvidence": None,
+        "rootLockIntegrated": False,
+        "semanticVerification": "UNVERIFIED",
+        "macosQuarantineFidelity": policy["macosQuarantineFidelity"],
+        "appleMetadata": policy["appleMetadata"],
+        "bsdFlags": "UNVERIFIED",
+        "acl": "UNVERIFIED",
+        "scope": "external_noindex_capture",
+    }
+
+
+def capture_package(group, app_support, preferences_dir, plan_path, output, maintenance_gate,
+                    production_plan=None, expect_plan_sha=None, failpoint=None, home=None,
+                    pre_commit_hook=None):
+    gate = load_maintenance_gate(maintenance_gate, group, app_support, preferences_dir, output)
+    verified = production_plan_was_verified(production_plan)
+    return export_package(group, app_support, preferences_dir, plan_path, output,
+                          expect_plan_sha=expect_plan_sha, failpoint=failpoint, home=home,
+                          pre_commit_hook=pre_commit_hook, allow_live_sources=True,
+                          maintenance_gate=gate, production_plan_verified=verified)
+
+
 def build_receipt(authority_bytes, plan_file_sha, plan_canonical, receipt_bytes,
                   whitelist_sha, exclusion_sha, archive_sha, policy, business_raw, runtime,
                   notes, widget_pending, expect_plan_sha):
@@ -1498,9 +1743,23 @@ def load_package(package):
         fail("receipt_missing_synthetic_boundary")
     if receipt.get("activeWrite") is not False:
         fail("receipt_claims_forbidden_action")
-    seal_root_fields(receipt.get("rootActualCurrentRecoveryFields"))
+    kind = receipt.get("kind")
+    if kind == "SyntheticReceiverWhitelistPackageRecord":
+        seal_root_fields(receipt.get("rootActualCurrentRecoveryFields"))
+        observation = receipt.get("syntheticObservation")
+    elif kind == "ReadOnlyWhitelistCaptureRecord":
+        if receipt.get("productionReady") is not False:
+            fail("production_ready_not_allowed")
+        fidelity = receipt.get("metadataFidelity") or {}
+        if fidelity.get("bsdFlags") == "PASS" or fidelity.get("acl") == "PASS":
+            fail("metadata_fidelity_pass_forged")
+        if fidelity.get("archiveToRestoreMetadataExact") is not None:
+            fail("metadata_exactness_not_proven")
+        seal_capture_fields(receipt.get("rootActualCurrentRecoveryFields"))
+        observation = receipt.get("captureObservation")
+    else:
+        fail("receipt_kind_unknown")
     seal_preparation(receipt.get("preparationContract"))
-    observation = receipt.get("syntheticObservation")
     if not isinstance(observation, dict) or observation.get("notRootEvidence") is not True:
         fail("receipt_missing_synthetic_boundary")
     if observation.get("semanticVerification") != "UNVERIFIED":
@@ -1541,7 +1800,7 @@ def verify_package(package, plan_path, restored=None, source_group=None, home=No
     refuse_live(plan_path, home)
     plan = migration.load_plan(plan_path)
     plan_canonical = migration.sha(migration.canonical(plan))
-    observation = loaded["receipt"]["syntheticObservation"]
+    observation = loaded["receipt"].get("syntheticObservation") or loaded["receipt"].get("captureObservation")
     if observation.get("suppliedPlanCanonicalSHA256") != plan_canonical:
         fail("package_plan_mismatch")
     payload_group = loaded["payload"] / "GroupContainer"
@@ -1759,6 +2018,14 @@ def main(argv=None):
     export.add_argument("--plan", type=Path, required=True)
     export.add_argument("--output", type=Path, required=True)
     export.add_argument("--expect-plan-sha")
+    capture = sub.add_parser("capture")
+    capture.add_argument("--group", type=Path, required=True)
+    capture.add_argument("--app-support", type=Path, required=True)
+    capture.add_argument("--preferences-dir", type=Path, required=True)
+    capture.add_argument("--plan", type=Path, required=True)
+    capture.add_argument("--output", type=Path, required=True)
+    capture.add_argument("--maintenance-gate", type=Path, required=True)
+    capture.add_argument("--production-plan", type=Path)
     restore = sub.add_parser("restore")
     restore.add_argument("--package", type=Path, required=True)
     restore.add_argument("--target", type=Path, required=True)
@@ -1772,6 +2039,9 @@ def main(argv=None):
         if args.command == "export":
             result = export_package(args.group, args.app_support, args.preferences_dir, args.plan,
                                     args.output, args.expect_plan_sha)
+        elif args.command == "capture":
+            result = capture_package(args.group, args.app_support, args.preferences_dir, args.plan,
+                                     args.output, args.maintenance_gate, args.production_plan)
         elif args.command == "restore":
             result = restore_package(args.package, args.target)
         else:

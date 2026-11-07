@@ -7,6 +7,7 @@ App Group, and a passing test is not a completed recovery of a real install.
 
 from __future__ import annotations
 
+import datetime as dt
 import importlib.util
 import json
 import os
@@ -266,7 +267,11 @@ class RecoveryTests(unittest.TestCase):
         self.assertGreaterEqual(package_receipt["syntheticObservation"]["businessRawBase64PointerCount"], 1)
         self.assertEqual(package_receipt["syntheticObservation"]["semanticVerification"], "UNVERIFIED")
         self.assertFalse(package_receipt["preparationContract"]["executeAllowed"])
-        self.assertFalse(package_receipt["preparationContract"]["readOnlyCapture"]["implemented"])
+        capture_contract = package_receipt["preparationContract"]["readOnlyCapture"]
+        self.assertTrue(capture_contract["implemented"])
+        self.assertFalse(capture_contract["defaultEnabled"])
+        self.assertFalse(capture_contract["productionReady"])
+        self.assertFalse(capture_contract["rootLockIntegrated"])
         self.assertEqual(before["plan"], self.world.plan_path.read_bytes())
         self.assertEqual(before["authority"], (self.world.group / "Integration/authority.json").read_bytes())
         self.assertEqual(before["receipt"], (self.world.group / "Integration/Transactions.noindex/receiver-tx-1/receipt.json").read_bytes())
@@ -535,22 +540,131 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(forged.exception.code, "root_field_prefilled_true")
         self.assertTrue((self.world.group / "Integration/authority.json").is_file())
 
-    def test_macos_probe_does_not_run_or_create_a_directory_by_default(self):
+    def _gate(self, output, **overrides):
+        start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)
+        body = {
+            "schemaVersion": 1,
+            "kind": "ExternalMaintenanceGate",
+            "role": "caller_attestation_pending_root_integration",
+            "rootLockIntegrated": False,
+            "method": "external_attestation_not_a_process_check",
+            "scope": {
+                "group": str(self.world.group),
+                "appSupport": str(self.world.support),
+                "preferencesDir": str(self.world.preferences),
+                "output": str(output),
+            },
+            "assertedPausedBundleIDs": sorted(tool.EXTERNAL_GATE_WRITERS),
+            "assertedAt": start.isoformat(),
+            "validUntil": (start + dt.timedelta(hours=1)).isoformat(),
+        }
+        body.update(overrides)
+        path = self.base / ("gate-" + output.name + ".json")
+        path.write_bytes(tool.canonical(body))
+        return path
+
+    def test_capture_is_read_only_and_not_production_ready(self):
+        output = self.base / "capture.noindex"
+        source_db = self.world.group / "Integration/Modules/Health/health.sqlite"
+        before = source_db.lstat()
+        before_xattr = os.getxattr(source_db, "user.rhythm.db", follow_symlinks=False)
+        summary = tool.capture_package(
+            self.world.group, self.world.support, self.world.preferences, self.world.plan_path,
+            output, self._gate(output))
+        self.assertEqual(summary["status"], "captured_not_production_ready")
+        self.assertFalse(summary["productionReady"])
+        self.assertIsNone(summary["productionPlanByteHashVerified"])
+        self.assertIsNone(summary["rootMaintenanceEvidence"])
+        self.assertEqual(summary["bsdFlags"], "UNVERIFIED")
+        self.assertEqual(summary["acl"], "UNVERIFIED")
+        self.assertEqual(source_db.lstat().st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual(os.getxattr(source_db, "user.rhythm.db", follow_symlinks=False), before_xattr)
+        self.assertTrue(all(str(source_db) not in opened for opened in tool.snapshot_database.opened))
+        receipt = json.loads((output / "manifests/receipt.json").read_text())
+        fields = receipt["rootActualCurrentRecoveryFields"]
+        self.assertEqual(fields["status"], "NOT_EXECUTED")
+        self.assertIsNone(fields["productionPlanByteHashVerified"])
+        self.assertIsNone(fields["rootMaintenanceEvidence"])
+        self.assertIsNone(fields["currentReadersCompatible"])
+        self.assertIsNone(fields["attachmentsAndGameProgressVerified"])
+        self.assertIsNone(fields["actualArchiveToRestoreMetadataExact"])
+        self.assertTrue(fields["threeCurrentDatabasesConsistent"])
+        self.assertNotEqual(receipt["metadataFidelity"]["bsdFlags"], "PASS")
+        self.assertNotEqual(receipt["metadataFidelity"]["acl"], "PASS")
+        self.assertIn("root_lock_not_integrated", receipt["productionReadyBlockers"])
+        self.assertFalse(receipt["externalMaintenanceGate"]["writersCheckedByThisTool"])
+        bogus = self.base / "not-production-plan.json"
+        bogus.write_bytes(b"{}")
+        with self.assertRaises(tool.RecoveryError) as mismatched:
+            tool.capture_package(self.world.group, self.world.support, self.world.preferences,
+                                 self.world.plan_path, self.base / "rejected.noindex",
+                                 self._gate(self.base / "rejected.noindex"), production_plan=bogus)
+        self.assertEqual(mismatched.exception.code, "production_plan_sha_mismatch")
+        self.assertFalse((self.base / "rejected.noindex").exists())
+
+    def test_maintenance_gate_rejects_a_confirmation_string_and_live_output(self):
+        output = self.base / "gated.noindex"
+        gate = json.loads(self._gate(output).read_text())
+        gate["confirmed"] = "no-writers"
+        path = self.base / "bad-gate.json"
+        path.write_bytes(tool.canonical(gate))
+        with self.assertRaises(tool.RecoveryError) as extra:
+            tool.capture_package(self.world.group, self.world.support, self.world.preferences,
+                                 self.world.plan_path, output, path)
+        self.assertEqual(extra.exception.code, "unknown_maintenance_gate_field")
+        self.assertFalse(output.exists())
+        claim = dict(gate)
+        claim.pop("confirmed")
+        claim["rootLockIntegrated"] = True
+        path.write_bytes(tool.canonical(claim))
+        with self.assertRaises(tool.RecoveryError) as claimed:
+            tool.capture_package(self.world.group, self.world.support, self.world.preferences,
+                                 self.world.plan_path, output, path)
+        self.assertEqual(claimed.exception.code, "root_lock_claim_rejected")
+        home = self.base / "home"
+        live = home / "Library/Group Containers" / tool.GROUP_ID
+        live.mkdir(parents=True)
+        live_output = live / "capture.noindex"
+        with self.assertRaises(tool.RecoveryError) as refused:
+            tool.capture_package(self.world.group, self.world.support, self.world.preferences,
+                                 self.world.plan_path, live_output, self._gate(live_output), home=home)
+        self.assertEqual(refused.exception.code, "live_data_root_refused")
+        self.assertFalse(live_output.exists())
+
+
+class StandaloneProbeTests(unittest.TestCase):
+    def test_probe_file_is_standalone_and_does_not_pass_unsupported_metadata(self):
         script = ROOT / "scripts/macos_synthetic_metadata_probe.py"
+        source = script.read_text()
+        self.assertNotIn("receiver_whitelist_recovery", source)
+        self.assertNotIn("test_receiver_whitelist_recovery", source)
+        probe = load("standalone_metadata_probe", script)
         parent = Path(tempfile.gettempdir())
         before = set(parent.glob("rhythm-macos-probe-*.noindex"))
-        idle = subprocess.run([sys.executable, str(script)], check=False, capture_output=True, text=True)
-        self.assertEqual(idle.returncode, 0, idle.stderr)
-        self.assertEqual(json.loads(idle.stdout)["status"], "not_run")
-        self.assertIsNone(json.loads(idle.stdout)["created"])
+        self.assertEqual(probe.main([]), 0)
+        self.assertEqual(probe.main(["--confirm-synthetic-macos-probe"]), 0)
         self.assertEqual(set(parent.glob("rhythm-macos-probe-*.noindex")), before)
         if sys.platform != "darwin":
-            refused = subprocess.run([sys.executable, str(script), "--confirm-synthetic-macos-probe"],
-                                     check=False, capture_output=True, text=True)
-            self.assertEqual(refused.returncode, 2, refused.stderr)
-            self.assertEqual(json.loads(refused.stdout)["code"], "macos_probe_requires_darwin")
-            self.assertIsNone(json.loads(refused.stdout)["created"])
-            self.assertEqual(set(parent.glob("rhythm-macos-probe-*.noindex")), before)
+            self.assertEqual(probe.main([probe.CONFIRM], {"TMPDIR": "/tmp", "HOME": "/home/probe"}), 2)
+        work = tempfile.TemporaryDirectory(suffix="-probe-unit")
+        root = Path(work.name)
+        try:
+            measured = probe.run_in(root)
+            self.assertNotEqual(measured["metadataOverall"], "PASS")
+            self.assertIn(measured["acl"], ("SKIP", "UNVERIFIED"))
+            self.assertIn(measured["bsdFlags"], ("SKIP", "UNVERIFIED"))
+            house = root / "home"
+            inside = house / "tmp"
+            inside.mkdir(parents=True)
+            self.assertEqual(probe.validate_roots(str(inside), str(house)), "tmpdir_inside_or_over_home")
+            self.assertEqual(probe.validate_roots("", str(house)), "tmpdir_or_home_unknown")
+            link = root / "linked"
+            target = root / "real"
+            target.mkdir()
+            link.symlink_to(target)
+            self.assertEqual(probe.validate_roots(str(link), str(house)), "symlink_path_refused")
+        finally:
+            work.cleanup()
 
 
 if __name__ == "__main__":
