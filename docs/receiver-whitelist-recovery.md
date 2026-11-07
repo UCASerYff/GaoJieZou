@@ -138,7 +138,7 @@ python3 scripts/receiver_whitelist_recovery.py verify \
 
 环境：Python 3.12.3，Linux。不是 macOS。
 
-结果：`python3 Tests/test_receiver_whitelist_recovery.py`，13 项全部通过，最近一次 1.712 秒。其中包括 `main → confirm → run_in` 的 mock Darwin 调度：两个样本先存在且为 0640，ACL 写入只落在探针目录内，缺文件诊断为 `set_file/restore/errno 2`，未确认、未知环境和符号链接在创建目录前拒绝。整体 `metadataOverall` 在 Linux 上仍是 `UNVERIFIED`。
+结果：`python3 Tests/test_receiver_whitelist_recovery.py`，13 项全部通过。本轮收工前复跑为 Python 3.12.3 / Linux，1.633 秒，提交 `f95ec876b12dc13ad463fb74f62b584a8f3e78b1` 的代码未改。其中包括 `main → confirm → run_in` 的 mock Darwin 调度：两个样本先存在且为 0640，ACL 写入只落在探针目录内，缺文件诊断为 `set_file/restore/errno 2`，未确认、未知环境和符号链接在创建目录前拒绝。整体 `metadataOverall` 在 Linux 上仍是 `UNVERIFIED`。这不是 Mac 证明。
 
 这些测试使用合成夹具。语义字段保持 null/UNVERIFIED。Linux 没有验证 macOS quarantine、BSD flags 或 ACL。
 
@@ -167,11 +167,4 @@ python3 macos_synthetic_metadata_probe.py --confirm-standalone-metadata-probe
 
 ## 以后若要做真实隔离恢复
 
-需要单独授权，本工具当前会拒绝真实路径。授权前至少要先做完：
-
-1. 退出搞节奏与搞健康，并使用仓库里尚未实现的 Root 写者暂停接口。不要占用 build lease 或 foreground lease。
-2. 准备外部维护门控 JSON。它只能声明仓库中的 8 个 bundle id 已暂停，并且 `rootLockIntegrated` 必须为 false。工具不会因此认为写者已经停止。
-3. 在本机对显式路径运行 `capture`。输出放在真实数据目录之外的新 `.noindex`。需要核验生产计划时再传入 `--production-plan`。
-4. 隔离 `restore` 的目标同样必须是新的 `.noindex`，不能是现用 Group。
-5. 在真实 Mac 上另批独立 metadata 探针，核对 quarantine、BSD flags 和 ACL。Linux 结果不能代替。探针通过也不等于恢复通过。
-6. 不要把本包交给 Host 的 `applyPending`。Root 锁没接上之前，`productionReady` 保持 false。
+本轮没有授权，也没有执行。完整边界、退出条件和 25 个字段的证据归属写在 `docs/receiver-maintenance-verification-plan.md`。工具仍不占用 `.rhythm-integration-writers.lock`。外部门控里的 bundle 名单不是写者已停止的证明。`productionReady` 保持 false。不要把本包交给 Host 的 `applyPending`。
