@@ -159,6 +159,38 @@ private struct ActiveHealthModuleView: View {
     }
 }
 
+/// Quick record actions live in the host's shared secondary navigation, not the window toolbar.
+public struct HealthModuleActionsView: View {
+    @ObservedObject private var store = HealthRuntime.store
+    public init() {}
+
+    public var body: some View {
+        HStack(spacing: 10) {
+            Menu {
+                Button(store.t("睡眠记录", "Sleep")) { store.newSleep() }
+                ForEach(RecordKind.allCases) { kind in
+                    Button(kind.title(store.en)) { store.new(kind) }
+                }
+            } label: {
+                Label(store.t("记一笔", "Record"), systemImage: "plus")
+            }
+            Menu {
+                Button(store.t("睡眠记录", "Sleep")) { store.newSleep(backfill: true) }
+                ForEach(RecordKind.allCases) { kind in
+                    Button(kind.title(store.en)) { store.new(kind, backfill: true) }
+                }
+                Button(store.t("快速事项", "Quick events")) { store.selectedTab = 5 }
+            } label: {
+                Label(store.t("补记", "Backfill"), systemImage: "clock.arrow.circlepath")
+            }
+        }
+        .font(.caption.weight(.medium))
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+    }
+}
+
 /// 搞健康设置页（app 级设置中心嵌入用）：内容与模块原「设置」侧栏页一致，
 /// store 由 framework 内 singleton 注入，外部嵌入无需提供环境对象。
 public struct HealthSettingsView: View {

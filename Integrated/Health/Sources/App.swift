@@ -44,19 +44,6 @@ struct ContentView: View {
             }
         }
         .background(Theme.background(scheme == .dark, store.state.preferences.backgroundHex))
-        .toolbar {
-            toolbarItemNoChrome(.primaryAction) {
-                HStack(spacing: 12) {
-                    Menu {
-                        Button(store.t("睡眠记录", "Sleep")) { store.newSleep() }
-                        ForEach(RecordKind.allCases) { kind in
-                            Button(kind.title(store.en)) { store.new(kind) }
-                        }
-                    } label: { Label(store.t("记一笔", "Record"), systemImage: "plus") }
-                    BackfillRecordMenu()
-                }.frame(width: 360, alignment: .trailing)
-            }
-        }
         .sheet(isPresented: $store.sleepEditor) { SleepRecordEditor().environmentObject(store) }
         .sheet(item: $store.editor) { record in RecordEditor(record: record).environmentObject(store) }
         .alert(store.t("操作未完成", "Action failed"), isPresented: Binding(
@@ -96,17 +83,5 @@ struct ContentView: View {
         case .trends: TrendsView()
         case .island: IslandView()
         }
-    }
-}
-
-@ToolbarContentBuilder
-private func toolbarItemNoChrome<Content: View>(
-    _ placement: ToolbarItemPlacement,
-    @ViewBuilder content: @escaping () -> Content
-) -> some ToolbarContent {
-    if #available(macOS 26.0, *) {
-        ToolbarItem(placement: placement, content: content).sharedBackgroundVisibility(.hidden)
-    } else {
-        ToolbarItem(placement: placement, content: content)
     }
 }

@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import RhythmHealth
+import RhythmFootprints
 
 struct ContentView: View {
     var route: URL? = nil
@@ -14,11 +16,11 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             WorkspaceTopBar(selection: selection, onWorkspace: selectWorkspace, onRecord: selectRecord)
-            if selection.workspace != .today && selection.workspace != .playground {
-                WorkspaceTabBar(selection: $selection, sections: selection.workspace.tabs(for: selection))
-            }
-            if selection.workspace == .playground && !showingPlaygroundIndex {
-                PlaygroundBackBar(showingIndex: $showingPlaygroundIndex)
+            if selection.workspace != .today && !(selection.workspace == .playground && showingPlaygroundIndex) {
+                WorkspaceTabBar(selection: $selection, sections: selection.workspace.tabs(for: selection),
+                                onBack: selection.workspace == .playground ? { showingPlaygroundIndex = true } : nil) {
+                    workspaceActions
+                }
             }
             ZStack {
                 settings.canvasColor(for: colorScheme).ignoresSafeArea()
@@ -84,6 +86,18 @@ struct ContentView: View {
         .onChange(of: routeRevision) { _, _ in handleIntegratedRoute() }
     }
 
+    @ViewBuilder
+    private var workspaceActions: some View {
+        switch selection.workspace {
+        case .health:
+            HealthModuleActionsView()
+        case .footprints:
+            FootprintsModuleActionsView()
+        default:
+            EmptyView()
+        }
+    }
+
     private func selectWorkspace(_ workspace: RhythmWorkspace) {
         guard selection.workspace != workspace else {
             if workspace == .playground { showingPlaygroundIndex = true }
@@ -135,7 +149,7 @@ struct ContentView: View {
             case .fishing:
                 FishingHubView()
             case .collection:
-                CollectionView()
+                FarmGameView(openCollectionOnAppear: true)
             case .healthOverview, .healthRecords, .healthEvents, .healthWater, .healthSleep, .healthMeals,
                  .healthExercise, .healthWeight, .healthTrends, .healthIsland:
                 IntegratedHealthView(section: selection, route: route, routeRevision: routeRevision) { selection = $0 }

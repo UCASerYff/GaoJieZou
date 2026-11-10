@@ -61,15 +61,6 @@ struct RootView: View {
             }
         }
         .background(Theme.background(scheme == .dark))
-        .toolbar {
-            toolbarItemNoChrome(.primaryAction) {
-                HStack(spacing: 12) {
-                    Button { store.editor = EditorRequest() } label: {
-                        Label(tF("点亮一个地方", "Light Up a Place"), systemImage: "plus")
-                    }.disabled(!store.ready)
-                }.frame(width: 360, alignment: .trailing)
-            }
-        }
         .overlay(alignment: .topTrailing) {
             if let name = store.celebration {
                 VStack(spacing: 8) {
@@ -106,18 +97,5 @@ struct RootView: View {
         )) {
             Button(tF("知道了", "OK")) { store.error = nil }
         } message: { Text(store.error ?? "") }
-    }
-}
-
-@ToolbarContentBuilder
-private func toolbarItemNoChrome<Content: View>(
-    _ placement: ToolbarItemPlacement,
-    @ViewBuilder content: @escaping () -> Content
-) -> some ToolbarContent {
-    if #available(macOS 26.0, *) {
-        ToolbarItem(placement: placement, content: content)
-            .sharedBackgroundVisibility(.hidden)
-    } else {
-        ToolbarItem(placement: placement, content: content)
     }
 }

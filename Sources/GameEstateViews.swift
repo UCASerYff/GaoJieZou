@@ -245,6 +245,8 @@ struct FarmGameView: View {
     @State private var message: String?
     @State private var worldYaw = 0.0
     @State private var worldZoom = 7.6
+    @State private var showingCollection = false
+    var openCollectionOnAppear = false
 
     private var worldItems: [GQWorldItem] {
         let season = (Calendar.current.component(.month, from: .now) + 9) % 12 / 3
@@ -298,6 +300,12 @@ struct FarmGameView: View {
                     decorationShop(size: size)
                         .zIndex(10)
                 }
+                if showingCollection {
+                    GameCollectionDrawer(size: size) { showingCollection = false } content: {
+                        CropCollectionView()
+                    }
+                    .zIndex(15)
+                }
                 if let message {
                     GameMessage(text: message)
                         .position(x: size.width / 2, y: 28)
@@ -307,6 +315,7 @@ struct FarmGameView: View {
         }
         .padding(.horizontal, 20)
         .padding(.bottom, 20)
+        .onAppear { if openCollectionOnAppear { showingCollection = true } }
     }
 
     @ViewBuilder
@@ -397,6 +406,11 @@ struct FarmGameView: View {
             GameToolButton(title: "装饰商店", symbol: "laurel.leading", selected: showingDecorations, badge: store.decorations.isEmpty ? nil : "\(store.decorations.count)") {
                 showingSeeds = false
                 showingDecorations.toggle()
+            }
+            GameToolButton(title: "作物图鉴", symbol: "books.vertical.fill", selected: showingCollection) {
+                showingSeeds = false
+                showingDecorations = false
+                showingCollection.toggle()
             }
             GameToolButton(title: "全部收获", symbol: "shippingbox.and.arrow.backward.fill", selected: false) {
                 let count = store.harvestAll()
@@ -767,6 +781,7 @@ struct PastureGameView: View {
     @EnvironmentObject private var settings: RhythmSettings
     @State private var tool: PastureTool = .inspect
     @State private var showingShop = false
+    @State private var showingCollection = false
     @State private var selectedInstanceID: String?
     @State private var draggingInstanceID: String?
     @State private var dragOffset: CGSize = .zero
@@ -835,6 +850,12 @@ struct PastureGameView: View {
                 } else if let selectedInstance {
                     selectedAnimalCard(selectedInstance, size: size)
                         .zIndex(8)
+                }
+                if showingCollection {
+                    GameCollectionDrawer(size: size) { showingCollection = false } content: {
+                        AnimalCollectionView()
+                    }
+                    .zIndex(15)
                 }
                 if let message {
                     GameMessage(text: message)
@@ -941,6 +962,11 @@ struct PastureGameView: View {
             GameToolButton(title: "全部收取", symbol: "shippingbox.and.arrow.backward.fill", selected: false) {
                 let count = store.collectAllAnimalProducts()
                 showMessage(count > 0 ? RhythmLocalization.format("已收取 %d 份牧场产物", count) : RhythmLocalization.text("目前没有可收取的产物"))
+            }
+            GameToolButton(title: "牲畜图鉴", symbol: "books.vertical.fill", selected: showingCollection) {
+                showingShop = false
+                selectedInstanceID = nil
+                showingCollection.toggle()
             }
             GameToolButton(title: "搭建新窝", symbol: "hammer.fill", selected: tool == .build, badge: store.animalShelterCapacity < 25 ? "\(store.nextAnimalShelterCost)" : nil) {
                 tool = .build
@@ -1299,6 +1325,7 @@ struct FishingGameView: View {
     @EnvironmentObject private var store: RhythmStore
     var openAquarium: () -> Void = {}
     @State private var showingInventory = false
+    @State private var showingCollection = false
     @State private var lastCaught: FishDefinition?
     @State private var session = FishingSession()
     @State private var fishingSpot = 1
@@ -1343,7 +1370,13 @@ struct FishingGameView: View {
                 fishingToolbar(size:size)
                 if showingInventory { inventoryDrawer(size:size).zIndex(10) }
                 if let lastCaught { caughtCard(fish:lastCaught,size:size).zIndex(11) }
-                if let message { GameMessage(text:message).position(x:size.width/2,y:150).zIndex(12) }
+                if showingCollection {
+                    GameCollectionDrawer(size: size) { showingCollection = false } content: {
+                        FishCollectionView()
+                    }
+                    .zIndex(15)
+                }
+                if let message { GameMessage(text:message).position(x:size.width/2,y:150).zIndex(16) }
             }
         }
         .padding(.horizontal,20).padding(.bottom,20)
@@ -1413,8 +1446,11 @@ struct FishingGameView: View {
                 session.cancel()
                 openAquarium()
             }
-            GameToolButton(title: "庄园图鉴", symbol: "books.vertical.fill", selected: false) {
-                showMessage(RhythmLocalization.format("已发现 %d/%d 种鱼", store.fishCaught.count, RhythmCatalog.fish.count))
+            GameToolButton(title: "鱼类图鉴", symbol: "books.vertical.fill", selected: showingCollection) {
+                session.cancel()
+                showingInventory = false
+                lastCaught = nil
+                showingCollection.toggle()
             }
         }
         .padding(9)

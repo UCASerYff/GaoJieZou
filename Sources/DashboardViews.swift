@@ -14,8 +14,10 @@ private enum HabitSheetRoute: Identifiable {
 
 struct TodayDashboard: View {
     @EnvironmentObject private var store: RhythmStore
+    @EnvironmentObject private var settings: RhythmSettings
     @Binding var selection: RhythmSection
     @State private var monthOffset = 0
+    @State private var showingSleepEditor = false
 
     private var todayHabits: [Habit] { store.habits(for: Date(), unfinishedFirst: true) }
     private var completedHabits: Int { todayHabits.filter { store.isHabitCompleted($0) }.count }
@@ -102,6 +104,11 @@ struct TodayDashboard: View {
             .padding(.horizontal, 24)
             .padding(.bottom, 28)
         }
+        .sheet(isPresented: $showingSleepEditor) {
+            ManualSleepEditor { showingSleepEditor = false }
+                .environmentObject(store)
+                .environmentObject(settings)
+        }
     }
 
     private var morningIntroduction: some View {
@@ -147,6 +154,9 @@ struct TodayDashboard: View {
                         Button(RhythmLocalization.text("开始专注")) { selection = .focus }
                             .buttonStyle(.borderedProminent)
                             .tint(RhythmTheme.morningClay)
+                        Button(RhythmLocalization.text("记录睡眠")) { showingSleepEditor = true }
+                            .buttonStyle(.bordered)
+                            .tint(RhythmTheme.purple)
                         Button(RhythmLocalization.text("今日打卡")) { selection = .habits }
                             .buttonStyle(.bordered)
                     }

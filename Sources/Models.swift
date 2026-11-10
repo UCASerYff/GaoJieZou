@@ -157,7 +157,7 @@ enum RhythmSection: String, CaseIterable, Identifiable {
     static let healthPages: [Self] = [.healthOverview, .healthRecords, .healthEvents, .healthWater, .healthSleep,
                                     .healthMeals, .healthExercise, .healthWeight, .healthTrends]
     static let travelPages: [Self] = [.footprintsMap, .footprintsTrips, .footprintsTimeline, .footprintsResidentCity]
-    static let rewardPages: [Self] = [.farm, .pasture, .fishing, .collection, .healthIsland, .footprintsTrain]
+    static let rewardPages: [Self] = [.farm, .pasture, .fishing, .healthIsland, .footprintsTrain]
 
     var isIntegrated: Bool {
         Self.healthPages.contains(self) || Self.travelPages.contains(self) ||

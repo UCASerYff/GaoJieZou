@@ -170,6 +170,22 @@ private struct ActiveFootprintsModuleView: View {
     }
 }
 
+/// The shared host navigation presents the same visit action without changing the window toolbar.
+public struct FootprintsModuleActionsView: View {
+    @ObservedObject private var store = FootprintsRuntime.store
+    public init() {}
+
+    public var body: some View {
+        Button { store.editor = EditorRequest() } label: {
+            Label(tF("点亮一个地方", "Light Up a Place"), systemImage: "plus")
+                .font(.caption.weight(.medium))
+        }
+        .buttonStyle(.plain)
+        .disabled(!store.ready)
+        .fixedSize()
+    }
+}
+
 public struct FootprintsSettingsView: View {
     public init() {}
     public var body: some View {

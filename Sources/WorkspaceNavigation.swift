@@ -72,7 +72,7 @@ extension RhythmSection {
         if self == .today { return .today }
         if Self.healthPages.contains(self) { return .health }
         if Self.travelPages.contains(self) { return .footprints }
-        if Self.rewardPages.contains(self) { return .playground }
+        if Self.rewardPages.contains(self) || self == .collection { return .playground }
         return .rhythm
     }
 }

@@ -600,7 +600,7 @@ struct SleepDashboard: View {
 /// 起止时间由 RhythmShared.manualSleepInterval 换算：结束固定在该晚次日 07:00，
 /// 开始 = 结束 - 时长，保证夜晚归属与 lastNightSleepDuration 统计口径一致。
 /// 采用轻量卡片布局替代 Form(.grouped)，消除首次模态展示时的 Grouped TableView 布局开销。
-private struct ManualSleepEditor: View {
+struct ManualSleepEditor: View {
     @EnvironmentObject private var store: RhythmStore
     @EnvironmentObject private var settings: RhythmSettings
     var onDismiss: () -> Void = {}

@@ -83,33 +83,57 @@ struct WorkspaceTopBar: View {
     }
 }
 
-struct WorkspaceTabBar: View {
+struct WorkspaceTabBar<Trailing: View>: View {
     @Binding var selection: RhythmSection
     let sections: [RhythmSection]
+    var onBack: (() -> Void)? = nil
+    @ViewBuilder var trailing: Trailing
+
+    init(selection: Binding<RhythmSection>, sections: [RhythmSection], onBack: (() -> Void)? = nil,
+         @ViewBuilder trailing: () -> Trailing) {
+        self._selection = selection
+        self.sections = sections
+        self.onBack = onBack
+        self.trailing = trailing()
+    }
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(sections) { section in
-                    Button { selection = section } label: {
-                        HStack(spacing: 7) {
-                            Image(systemName: section.symbol)
-                            Text(tabTitle(for: section))
-                        }
-                        .font(.caption.weight(selection == section ? .semibold : .medium))
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 30)
-                        .foregroundStyle(selection == section ? RhythmTheme.morningGreen : Color.secondary)
-                        .background(selection == section ? RhythmTheme.morningGreen.opacity(0.11) : Color.clear,
-                                    in: Capsule())
-                        .overlay(Capsule().stroke(selection == section ? RhythmTheme.morningGreen.opacity(0.2) : RhythmTheme.cardBorder))
-                        .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+        HStack(spacing: 0) {
+            if let onBack {
+                Button(action: onBack) {
+                    Label(RhythmLocalization.text("乐园"), systemImage: "chevron.left")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(RhythmTheme.morningGreen)
                 }
+                .buttonStyle(.plain)
+                .padding(.leading, 22)
             }
-            .padding(.horizontal, 26)
-            .padding(.vertical, 8)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(sections) { section in
+                        Button { selection = section } label: {
+                            HStack(spacing: 7) {
+                                Image(systemName: section.symbol)
+                                Text(tabTitle(for: section))
+                            }
+                            .font(.caption.weight(selection == section ? .semibold : .medium))
+                            .padding(.horizontal, 12)
+                            .frame(minHeight: 30)
+                            .foregroundStyle(selection == section ? RhythmTheme.morningGreen : Color.secondary)
+                            .background(selection == section ? RhythmTheme.morningGreen.opacity(0.11) : Color.clear,
+                                        in: Capsule())
+                            .overlay(Capsule().stroke(selection == section ? RhythmTheme.morningGreen.opacity(0.2) : RhythmTheme.cardBorder))
+                            .contentShape(Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, onBack == nil ? 26 : 12)
+                .padding(.vertical, 8)
+            }
+            trailing
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
         }
         .background(RhythmTheme.barBackground.opacity(0.72))
     }
@@ -121,6 +145,12 @@ struct WorkspaceTabBar: View {
         case .healthEvents: RhythmLocalization.text("快速事项")
         default: section.title
         }
+    }
+}
+
+extension WorkspaceTabBar where Trailing == EmptyView {
+    init(selection: Binding<RhythmSection>, sections: [RhythmSection], onBack: (() -> Void)? = nil) {
+        self.init(selection: selection, sections: sections, onBack: onBack) { EmptyView() }
     }
 }
 
