@@ -300,7 +300,7 @@ struct MapPage: View {
     @State private var exporting = false
     @FocusState private var searchFocused: Bool
     var body: some View {
-        VStack(alignment:.leading,spacing:20) {
+        VStack(alignment:.leading,spacing:17) {
             HStack(alignment:.top) {
                 Heading(title:"走过的地方，都算数。",subtitle:"不赶路，不打卡。把记忆，一点一点留在地图上。")
                 Spacer()

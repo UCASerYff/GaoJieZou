@@ -13,7 +13,7 @@ struct RootView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ZStack(alignment: .bottom) {
+            ZStack(alignment: .top) {
                 if let resourceError = store.resourceError {
                     VStack(spacing: 16) {
                         Image(systemName: "map.fill").font(.system(size: 40)).foregroundStyle(Theme.teal)

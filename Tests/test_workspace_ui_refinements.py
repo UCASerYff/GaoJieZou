@@ -14,7 +14,13 @@ def main():
     farm = read("Sources/GameEstateViews.swift")
     health = read("Integrated/Health/Sources/App.swift")
     footprints = read("Integrated/Footprints/Sources/App.swift")
+    footprints_map = read("Integrated/Footprints/Sources/MapView.swift")
+    map_shell = footprints_map.split("struct MapPage: View {", 1)[1].split("var visibleCities", 1)[0]
 
+    assert "VStack(alignment:.leading,spacing:17) {" in map_shell, "地图页需收紧纵向间距，避免最小高度把共享工作台上顶"
+    assert "VStack(alignment:.leading,spacing:18) {" not in map_shell, "18 点间距仍会让共享工作台上移约 3 像素"
+    assert "ZStack(alignment: .top)" in footprints, "足迹正文必须从顶部排布，避免空间紧张时向上跳动"
+    assert "ZStack(alignment: .bottom)" not in footprints, "底部对齐会在内容最小高度超出可用空间时挤出顶部"
     assert ".toolbar" not in health, "健康不应再向系统标题栏注入独立按钮"
     assert ".toolbar" not in footprints, "足迹不应再向系统标题栏注入独立按钮"
     assert "HealthModuleActionsView()" in content
