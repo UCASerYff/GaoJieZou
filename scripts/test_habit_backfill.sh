@@ -17,6 +17,6 @@ swiftc -swift-version 5 -parse-as-library -D SMOKE_TEST \
     -module-cache-path "$TEST_BUILD/cache" \
     -framework AppKit -framework SwiftUI -framework Combine -framework WidgetKit \
     -framework UserNotifications -lsqlite3 \
-    $FILES "$ROOT/Tests/HabitBackfillRegression.swift" \
+    "$ROOT/Integration/Shared/IntegrationAuthority.swift" $FILES "$ROOT/Tests/HabitBackfillRegression.swift" \
     -o "$TEST_BUILD/habit-backfill-regression"
 "$TEST_BUILD/habit-backfill-regression"

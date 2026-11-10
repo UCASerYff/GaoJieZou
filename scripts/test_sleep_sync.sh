@@ -12,11 +12,11 @@ SOURCES=(
 )
 FILES=()
 for SOURCE in $SOURCES; do FILES+=("$ROOT/Sources/$SOURCE.swift"); done
-swiftc -swift-version 5 -parse-as-library -D SMOKE_TEST \
+swiftc -swift-version 5 -parse-as-library -D SMOKE_TEST -D INTEGRATION_PATH_TEST \
     -sdk "$SDK" -target arm64-apple-macosx14.0 \
     -module-cache-path "$TEST_BUILD/cache" \
     -framework AppKit -framework SwiftUI -framework Combine -framework WidgetKit \
     -framework UserNotifications -lsqlite3 \
-    $FILES "$ROOT/Tests/SleepSyncRegression.swift" \
+    "$ROOT/Integration/Shared/IntegrationAuthority.swift" $FILES "$ROOT/Tests/SleepSyncRegression.swift" \
     -o "$TEST_BUILD/sleep-sync-regression"
 "$TEST_BUILD/sleep-sync-regression"
