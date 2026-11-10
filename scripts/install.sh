@@ -125,14 +125,22 @@ if not headers:
             re.fullmatch(r'0\s+plug-in(?:\(s\)|s)?',output.strip()) is not None)
     print('absent')
 else:
-    require(len(headers)==1)
-    header=headers[0]
-    paths=re.findall(r'^\s*Path = (.+)$',output,re.M)
-    identifiers=re.findall(r'^\s*UUID = (.+)$',output,re.M)
-    require(header.group(2)==version and paths==[extension] and len(identifiers)==1 and
-            re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',identifiers[0]) is not None and
-            uuid.UUID(identifiers[0]).int!=0)
-    print('present')
+    blocks=[]
+    for index,header in enumerate(headers):
+        end=headers[index+1].start() if index+1<len(headers) else len(output)
+        blocks.append((header,output[header.start():end]))
+    matches=[(header,block) for header,block in blocks
+             if re.findall(r'^\s*Path = (.+)$',block,re.M)==[extension]]
+    require(len(matches)<=1)
+    if not matches:
+        print('absent')
+    else:
+        header,block=matches[0]
+        identifiers=re.findall(r'^\s*UUID = (.+)$',block,re.M)
+        require(header.group(2)==version and len(identifiers)==1 and
+                re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',identifiers[0]) is not None and
+                uuid.UUID(identifiers[0]).int!=0)
+        print('present')
 PYWIDGETREG
 }
 no_main_process() {
