@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Static guard: the shipping UI must not create or schedule backup restores."""
+import plistlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -63,8 +64,20 @@ for relative in FILES:
         if token in text:
             violations.append(f"{relative}: {token}")
 
+install = (ROOT / "scripts/install.sh").read_text(encoding="utf-8")
+for token in ("rollback", "ARCHIVE", "RECEIPT", "VERIFIED", "upgrade_data.py snapshot"):
+    if token in install:
+        violations.append(f"scripts/install.sh: {token}")
+
+info = plistlib.loads((ROOT / "Info.plist").read_bytes())
+if info.get("CFBundleShortVersionString") != "4.11" or info.get("CFBundleVersion") != "12":
+    violations.append("Info.plist: expected version 4.11 build 12")
+for key in ("CFBundleDocumentTypes", "UTExportedTypeDeclarations"):
+    if "backup" in str(info.get(key, [])).lower() or "备份" in str(info.get(key, [])):
+        violations.append(f"Info.plist: backup declaration remains in {key}")
+
 if violations:
-    print("FAIL: backup or restore entry remains")
+    print("FAIL: backup, restore, or rollback entry remains")
     print("\n".join(violations))
     raise SystemExit(1)
-print("PASS: no backup or restore UI entry")
+print("PASS: no backup, restore, or rollback entry; version is 4.11 build 12")

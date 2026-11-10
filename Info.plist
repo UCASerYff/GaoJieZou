@@ -6,19 +6,6 @@
 	<string>zh_CN</string>
 	<key>CFBundleDisplayName</key>
 	<string>搞节奏</string>
-	<key>CFBundleDocumentTypes</key>
-	<array>
-		<dict>
-			<key>CFBundleTypeName</key>
-			<string>搞节奏完整备份</string>
-			<key>CFBundleTypeRole</key>
-			<string>Viewer</string>
-			<key>LSItemContentTypes</key>
-			<array>
-				<string>com.gaojiezou.backup</string>
-			</array>
-		</dict>
-	</array>
 	<key>CFBundleExecutable</key>
 	<string>GaoJieZou</string>
 	<key>CFBundleIconFile</key>
@@ -35,7 +22,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>4.10</string>
+	<string>4.11</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -50,7 +37,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>11</string>
+	<string>12</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.productivity</string>
 	<key>LSMinimumSystemVersion</key>
@@ -68,27 +55,5 @@
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
-	<key>UTExportedTypeDeclarations</key>
-	<array>
-		<dict>
-			<key>UTTypeConformsTo</key>
-			<array>
-				<string>public.archive</string>
-			</array>
-			<key>UTTypeDescription</key>
-			<string>搞节奏完整备份</string>
-			<key>UTTypeIdentifier</key>
-			<string>com.gaojiezou.backup</string>
-			<key>UTTypeTagSpecification</key>
-			<dict>
-				<key>public.filename-extension</key>
-				<array>
-					<string>gaojiezou</string>
-				</array>
-				<key>public.mime-type</key>
-				<string>application/x-gaojiezou-backup</string>
-			</dict>
-		</dict>
-	</array>
 </dict>
 </plist>
