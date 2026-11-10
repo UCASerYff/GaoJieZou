@@ -83,18 +83,19 @@ struct ContentView: View {
     @ViewBuilder private var selectedContent: some View {
         switch page {
         case .overview: TodayView()
+        case .records: AllHealthRecordsView()
         case .events: QuickEventsView()
-        case .water: RecordsView(kind: .water)
+        case .water: AllHealthRecordsView(initialFilter: .water)
         case .sleep: SleepRecordsView()
-        case .meals: RecordsView(kind: .meal)
-        case .exercise: RecordsView(kind: .exercise)
+        case .meals: AllHealthRecordsView(initialFilter: .meals)
+        case .exercise: AllHealthRecordsView(initialFilter: .exercise)
         case .weight:
             if store.state.preferences.hideWeight {
                 SectionTitle(title: store.t("体重记录", "Weight records"),
                              subtitle: store.t("体重记录已在健康设置中隐藏。", "Weight records are hidden in Health settings."))
                 EmptyCard(symbol: "eye.slash", title: store.t("体重记录已隐藏", "Weight records hidden"),
                           detail: store.t("原记录仍保留，可在健康设置中重新显示。", "Existing records are retained. Show them again in Health settings."))
-            } else { RecordsView(kind: .weight) }
+            } else { AllHealthRecordsView(initialFilter: .weight) }
         case .trends: TrendsView()
         case .island: IslandView()
         }

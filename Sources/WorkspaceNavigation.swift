@@ -56,7 +56,7 @@ enum RhythmWorkspace: String, CaseIterable, Identifiable {
         case .rhythm:
             return [.focus, .sleep, .habits, .chores, .longGoals, .shortActions, .statistics]
         case .health:
-            return [.healthOverview, .healthEvents, .healthTrends]
+            return [.healthOverview, .healthRecords, .healthTrends, .healthEvents]
         case .footprints:
             var pages: [RhythmSection] = [.footprintsMap, .footprintsTrips, .footprintsTimeline]
             if selection == .footprintsResidentCity { pages.append(.footprintsResidentCity) }

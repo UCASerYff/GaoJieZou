@@ -15,52 +15,75 @@ struct RecordEditor: View {
     var existing: Bool { store.state.records.contains{$0.id==record.id} }
     var body: some View {
         VStack(spacing:0) {
-            HStack { SymbolTile(symbol:record.kind.symbol,color:Theme.color(record.kind)); VStack(alignment:.leading,spacing:4) { Text((existing ? store.t("编辑","Edit ") : isBackfill ? store.t("补记","Past entry: ") : store.t("记录","Record "))+record.kind.title(store.en)).font(.title2.weight(.semibold)); Text(store.t("真实记录就好，留空也没关系。","Just the facts. Optional fields can stay empty.")).font(.caption).foregroundStyle(.secondary) }; Spacer(); Button { dismiss() } label:{Image(systemName:"xmark")}.buttonStyle(.plain) }.padding(24)
+            HStack(spacing:14) {
+                SymbolTile(symbol:record.kind.symbol,color:Theme.color(record.kind))
+                VStack(alignment:.leading,spacing:4) {
+                    Text((existing ? store.t("编辑","Edit ") : isBackfill ? store.t("补记","Past entry: ") : store.t("记录","Record "))+record.kind.title(store.en))
+                        .font(.system(size:23,weight:.semibold,design:.serif))
+                    Text(store.t("真实记录就好，留空也没关系。","Just the facts. Optional fields can stay empty."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button { dismiss() } label:{ Image(systemName:"xmark").frame(width:28,height:28).background(Color.primary.opacity(0.05),in:Circle()) }.buttonStyle(.plain)
+            }.padding(.horizontal,24).padding(.vertical,20)
             Divider()
             ScrollView {
-                VStack(alignment:.leading,spacing:18) {
-                    HealthRecordTimeFields(occurredAt:$record.occurredAt,isBackfill:$isBackfill,isEditing:existing,calendar:Engine.calendar(store.state),en:store.en)
-                    if record.kind == .meal {
-                        let slots=store.state.preferences.config(Engine.day(record.occurredAt,store.state)).slots
-                        Picker(store.t("餐别","Meal slot"),selection:$record.slot) {
-                            ForEach(0..<slots,id:\.self) { i in Text(Engine.mealTitle(slot:i,occurredAt:record.occurredAt,store.state)).tag(i) }
-                            Text(store.t("加餐（仅记录）","Snack (journal only)")).tag(4)
-                        }.pickerStyle(.segmented)
-                    }
-                    if record.kind == .meal || record.kind == .exercise {
-                        field(store.t("名称","Name"),$record.title,store.t("例如：家常午餐 / 步行","e.g. Lunch / Walking"))
-                    }
-                    if record.kind == .meal {
-                        Picker(store.t("饮食方式","Meal source"), selection:$mealSource) {
-                            Text(store.t("旧记录未分类","Earlier entry: unspecified")).tag(nil as MealSource?)
-                            ForEach(MealSource.allCases) { source in Text(source.title(store.en)).tag(Optional(source)) }
+                VStack(alignment:.leading,spacing:16) {
+                    VStack(alignment:.leading,spacing:14) {
+                        HealthRecordTimeFields(occurredAt:$record.occurredAt,isBackfill:$isBackfill,isEditing:existing,calendar:Engine.calendar(store.state),en:store.en)
+                    }.card(16)
+                    VStack(alignment:.leading,spacing:16) {
+                        if record.kind == .meal {
+                            let slots=store.state.preferences.config(Engine.day(record.occurredAt,store.state)).slots
+                            Picker(store.t("餐别","Meal slot"),selection:$record.slot) {
+                                ForEach(0..<slots,id:\.self) { i in Text(Engine.mealTitle(slot:i,occurredAt:record.occurredAt,store.state)).tag(i) }
+                                Text(store.t("加餐（仅记录）","Snack (journal only)")).tag(4)
+                            }.pickerStyle(.segmented)
                         }
-                        HStack {
-                            Text(store.t("饱食程度","Fullness"))
-                            Slider(value:$fullness,in:0...100,step:5)
-                            Text("\(Int(fullness))%").monospacedDigit().frame(width:48,alignment:.trailing)
+                        if record.kind == .meal || record.kind == .exercise {
+                            field(store.t("名称","Name"),$record.title,store.t("例如：家常午餐 / 步行","e.g. Lunch / Walking"))
                         }
-                        Text(store.t("饱食程度会影响今天给岛屿补充的食物储备；每餐按上限计算。","Fullness determines today's island food reward, subject to the meal limit."))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    if record.kind != .meal {
-                        HStack {
-                            field(store.t("数量","Amount"),$amount,record.kind.unit)
-                            Text(record.kind.unit).foregroundStyle(.secondary).padding(.top,20)
+                        if record.kind == .meal {
+                            Picker(store.t("饮食方式","Meal source"), selection:$mealSource) {
+                                Text(store.t("旧记录未分类","Earlier entry: unspecified")).tag(nil as MealSource?)
+                                ForEach(MealSource.allCases) { source in Text(source.title(store.en)).tag(Optional(source)) }
+                            }
+                            HStack {
+                                Text(store.t("饱食程度","Fullness"))
+                                Slider(value:$fullness,in:0...100,step:5)
+                                Text("\(Int(fullness))%").monospacedDigit().frame(width:48,alignment:.trailing)
+                            }
+                            Text(store.t("饱食程度会影响今天给岛屿补充的食物储备；每餐按上限计算。","Fullness determines today's island food reward, subject to the meal limit."))
+                                .font(.caption).foregroundStyle(.secondary)
                         }
-                    }
-                    if record.kind == .exercise {
-                        field(store.t("消耗（手填，可选）","Energy burned (manual, optional)"),$calories,"kcal")
-                    }
-                    field(store.t("备注（可选）","Note (optional)"),$record.note,store.t("给这次记录留一句话","Anything you want to remember"))
-                    if record.kind == .meal || record.kind == .exercise { Toggle(store.t("同时保存为常用模板","Also save as a favorite template"),isOn:$template) }
-                    if !validation.isEmpty { Text(validation).foregroundStyle(.red).font(.callout) }
-                    Text(store.t("补记只更正历史；每日游戏奖励有上限。","Past entries update your history. Game rewards have daily limits.")).font(.caption).foregroundStyle(.secondary)
-                }.padding(24)
+                        if record.kind != .meal {
+                            HStack(alignment:.bottom) {
+                                field(store.t("数量","Amount"),$amount,record.kind.unit)
+                                Text(record.kind.unit).foregroundStyle(.secondary).padding(.bottom,10)
+                            }
+                        }
+                        if record.kind == .exercise {
+                            field(store.t("消耗（手填，可选）","Energy burned (manual, optional)"),$calories,"kcal")
+                        }
+                    }.card(18)
+                    VStack(alignment:.leading,spacing:14) {
+                        field(store.t("备注（可选）","Note (optional)"),$record.note,store.t("给这次记录留一句话","Anything you want to remember"))
+                        if record.kind == .meal || record.kind == .exercise { Toggle(store.t("同时保存为常用模板","Also save as a favorite template"),isOn:$template) }
+                        Text(store.t("补记只更正历史；每日游戏奖励有上限。","Past entries update your history. Game rewards have daily limits.")).font(.caption).foregroundStyle(.secondary)
+                    }.card(16)
+                    if !validation.isEmpty { Text(validation).foregroundStyle(.red).font(.callout).padding(.horizontal,4) }
+                }.padding(20)
             }
             Divider()
-            HStack { Button(store.t("取消","Cancel")) { dismiss() }.keyboardShortcut(.cancelAction); Spacer(); Button(existing ? store.t("保存修改","Save changes") : store.t("保存记录","Save record")) { submit() }.buttonStyle(.borderedProminent).tint(Theme.teal).keyboardShortcut(.defaultAction) }.padding(20)
-        }.frame(minWidth:560,idealWidth:600,maxWidth:720,minHeight:480,idealHeight:record.kind == .meal ? 530 : 520)
+            HStack {
+                Button(store.t("取消","Cancel")) { dismiss() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(existing ? store.t("保存修改","Save changes") : store.t("保存记录","Save record")) { submit() }
+                    .buttonStyle(.borderedProminent).tint(Theme.orange).keyboardShortcut(.defaultAction)
+            }.padding(.horizontal,24).padding(.vertical,16)
+        }
+        .background(Color(nsColor:.windowBackgroundColor))
+        .frame(minWidth:580,idealWidth:620,maxWidth:740,minHeight:540,idealHeight:record.kind == .meal ? 620 : 570)
         .onAppear {
             isBackfill=existing || startInBackfill || !Engine.calendar(store.state).isDate(record.occurredAt,inSameDayAs:Date())
             amount=number(record.amount)
@@ -70,7 +93,13 @@ struct RecordEditor: View {
         }
     }
     private func field(_ title:String,_ binding:Binding<String>,_ placeholder:String)->some View {
-        VStack(alignment:.leading,spacing:6) { Text(title).font(.caption).foregroundStyle(.secondary); TextField(placeholder,text:binding).textFieldStyle(.roundedBorder) }
+        VStack(alignment:.leading,spacing:7) {
+            Text(title).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            TextField(placeholder,text:binding).textFieldStyle(.plain)
+                .padding(.horizontal,11).padding(.vertical,9)
+                .background(Color.primary.opacity(0.035),in:RoundedRectangle(cornerRadius:11))
+                .overlay(RoundedRectangle(cornerRadius:11).stroke(Color.primary.opacity(0.075)))
+        }
     }
     private func submit() {
         func parse(_ input:String) throws -> Double? {

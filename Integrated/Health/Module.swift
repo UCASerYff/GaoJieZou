@@ -41,11 +41,12 @@ private struct HealthActivationGate<Content: View>: View {
 
 /// The merged host owns navigation; these are individual content pages only.
 public enum HealthNavigationPage: String, CaseIterable, Hashable {
-    case overview, events, water, sleep, meals, exercise, weight, trends, island
+    case overview, records, events, water, sleep, meals, exercise, weight, trends, island
 
     var selectedTab: Int {
         switch self {
         case .overview: 0
+        case .records: 11
         case .events: 5
         case .water: 6
         case .sleep: 10
@@ -144,6 +145,7 @@ private struct ActiveHealthModuleView: View {
         else if destination == "import" { store.restore() }
         else if destination == "sleep" { select(.sleep) }
         else if destination == "events" { select(.events) }
+        else if destination == "records" { select(.records) }
         else if destination == "island" || destination == "game" { select(.island) }
         else if destination == "trends" { select(.trends) }
         else if let kind = RecordKind(rawValue: destination) {

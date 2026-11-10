@@ -35,6 +35,7 @@ enum RhythmSection: String, CaseIterable, Identifiable {
     case collection
     // Preserve the existing scene-storage values while making them leaf pages.
     case healthOverview = "health"
+    case healthRecords
     case healthEvents
     case healthWater
     case healthSleep
@@ -65,7 +66,8 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .pasture: "牧场"
         case .fishing: "渔场"
         case .collection: "庄园图鉴"
-        case .healthOverview: "今日概览"
+        case .healthOverview: "今日"
+        case .healthRecords: "全部记录"
         case .healthEvents: "快速事项"
         case .healthWater: "喝水记录"
         case .healthSleep: "睡眠记录"
@@ -98,6 +100,7 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .fishing: "在湖边抛竿、管理鱼篓，并进入水族馆照料收藏"
         case .collection: "查看已经收获、饲养和发现的庄园物种"
         case .healthOverview: "查看今天的健康记录与目标"
+        case .healthRecords: "按类型筛选、搜索和整理全部健康记录"
         case .healthEvents: "记录日常健康事项"
         case .healthWater: "查看与记录每日饮水"
         case .healthSleep: "与睡眠计时共享同一份睡眠记录"
@@ -134,6 +137,7 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case .fishing: "fish.fill"
         case .collection: "books.vertical.fill"
         case .healthOverview: "heart.fill"
+        case .healthRecords: "square.stack.3d.up.fill"
         case .healthEvents: "square.grid.3x3.fill"
         case .healthWater: "drop.fill"
         case .healthSleep: "moon.stars.fill"
@@ -150,7 +154,7 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         }
     }
 
-    static let healthPages: [Self] = [.healthOverview, .healthEvents, .healthWater, .healthSleep,
+    static let healthPages: [Self] = [.healthOverview, .healthRecords, .healthEvents, .healthWater, .healthSleep,
                                     .healthMeals, .healthExercise, .healthWeight, .healthTrends]
     static let travelPages: [Self] = [.footprintsMap, .footprintsTrips, .footprintsTimeline, .footprintsResidentCity]
     static let rewardPages: [Self] = [.farm, .pasture, .fishing, .collection, .healthIsland, .footprintsTrain]
@@ -166,6 +170,7 @@ enum RhythmSection: String, CaseIterable, Identifiable {
         case "longGoals": return .longGoals
         case "health":
             switch action {
+            case "records": return .healthRecords
             case "events": return .healthEvents
             case "water": return .healthWater
             case "sleep": return .healthSleep

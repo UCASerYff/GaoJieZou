@@ -219,57 +219,49 @@ private struct LongGoalEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(RhythmLocalization.text(goal == nil ? "新建长期目标" : "编辑长期目标")).font(.title2.weight(.semibold))
-                    Text(RhythmLocalization.text("长期目标描述结果，具体执行步骤放在短期行动中。"))
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(RhythmLocalization.text("取消")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(RhythmLocalization.text("保存")) {
-                    store.saveGoal(
-                        existingID: goal?.id,
-                        title: title,
-                        reason: reason,
-                        outcome: outcome,
-                        targetValue: targetValue,
-                        currentValue: currentValue,
-                        unit: unit,
-                        startDate: startDate,
-                        targetDate: targetDate,
-                        status: status
-                    )
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding(22)
+            RecordHeader(symbol: "flag.checkered",
+                         title: RhythmLocalization.text(goal == nil ? "新建长期目标" : "编辑长期目标"),
+                         subtitle: RhythmLocalization.text("描述想抵达的结果，把具体执行留给短期行动。"),
+                         onClose: { dismiss() })
             Divider()
-            Form {
-                TextField(RhythmLocalization.text("目标名称"), text: $title)
-                TextField(RhythmLocalization.text("为什么要完成它"), text: $reason, axis: .vertical)
-                    .lineLimit(2...4)
-                TextField(RhythmLocalization.text("最终希望得到什么结果"), text: $outcome, axis: .vertical)
-                    .lineLimit(2...4)
-                HStack {
-                    TextField(RhythmLocalization.text("当前值"), value: $currentValue, format: .number)
-                    Text("/").foregroundStyle(.secondary)
-                    TextField(RhythmLocalization.text("目标值"), value: $targetValue, format: .number)
-                    TextField(RhythmLocalization.text("单位"), text: $unit).frame(width: 100)
-                }
-                DatePicker(RhythmLocalization.text("开始日期"), selection: $startDate, displayedComponents: .date)
-                DatePicker(RhythmLocalization.text("期望完成日期"), selection: $targetDate, in: startDate..., displayedComponents: .date)
-                Picker(RhythmLocalization.text("状态"), selection: $status) {
-                    ForEach(GoalStatus.allCases) { status in Text(status.title).tag(status) }
-                }
+            ScrollView {
+                VStack(spacing: 16) {
+                    RecordSection(title: RhythmLocalization.text("目标的样子")) {
+                        RecordField(title: RhythmLocalization.text("目标名称")) {
+                            TextField(RhythmLocalization.text("例如：完成一门课程"), text: $title)
+                        }
+                        RecordField(title: RhythmLocalization.text("为什么要完成它")) {
+                            TextField(RhythmLocalization.text("写下真正的动机"), text: $reason, axis: .vertical).lineLimit(2...4)
+                        }
+                        RecordField(title: RhythmLocalization.text("最终希望得到什么结果")) {
+                            TextField(RhythmLocalization.text("怎样算完成？"), text: $outcome, axis: .vertical).lineLimit(2...4)
+                        }
+                    }
+                    RecordSection(title: RhythmLocalization.text("进度与时间")) {
+                        HStack(spacing: 10) {
+                            RecordField(title: RhythmLocalization.text("当前值")) { TextField("0", value: $currentValue, format: .number) }
+                            RecordField(title: RhythmLocalization.text("目标值")) { TextField("1", value: $targetValue, format: .number) }
+                            RecordField(title: RhythmLocalization.text("单位")) { TextField(RhythmLocalization.text("项"), text: $unit) }
+                        }
+                        DatePicker(RhythmLocalization.text("开始日期"), selection: $startDate, displayedComponents: .date)
+                        DatePicker(RhythmLocalization.text("期望完成日期"), selection: $targetDate, in: startDate..., displayedComponents: .date)
+                        Picker(RhythmLocalization.text("状态"), selection: $status) {
+                            ForEach(GoalStatus.allCases) { status in Text(status.title).tag(status) }
+                        }.pickerStyle(.segmented)
+                    }
+                }.padding(20)
             }
-            .formStyle(.grouped)
+            Divider()
+            RecordActionBar(saveDisabled: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            onCancel: { dismiss() }) {
+                store.saveGoal(existingID: goal?.id, title: title, reason: reason, outcome: outcome,
+                               targetValue: targetValue, currentValue: currentValue, unit: unit,
+                               startDate: startDate, targetDate: targetDate, status: status)
+                dismiss()
+            }
         }
-        .frame(minWidth: 600, idealWidth: 640, minHeight: 560, idealHeight: 620)
+        .background(RhythmTheme.panel)
+        .frame(minWidth: 620, idealWidth: 660, minHeight: 580, idealHeight: 640)
     }
 }
 
@@ -456,53 +448,52 @@ private struct ShortActionEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(RhythmLocalization.text(action == nil ? "新建短期行动" : "编辑短期行动")).font(.title2.weight(.semibold))
-                    Text(RhythmLocalization.text("完成行动可获得金币和鱼饵，专注时间也可以归集到这里。"))
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(RhythmLocalization.text("取消")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(RhythmLocalization.text("保存")) {
-                    store.saveAction(
-                        existingID: action?.id,
-                        goalID: goalID,
-                        title: title,
-                        notes: notes,
-                        startDate: hasTimeSpan ? startDate : nil,
-                        endDate: hasTimeSpan ? max(startDate, endDate) : nil,
-                        estimatedMinutes: estimatedMinutes,
-                        isCompleted: isCompleted
-                    )
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .padding(22)
+            RecordHeader(symbol: "list.bullet.clipboard.fill",
+                         title: RhythmLocalization.text(action == nil ? "新建短期行动" : "编辑短期行动"),
+                         subtitle: RhythmLocalization.text("把下一个可以完成的步骤写清楚。"),
+                         onClose: { dismiss() })
             Divider()
-            Form {
-                TextField(RhythmLocalization.text("行动名称"), text: $title)
-                Picker(RhythmLocalization.text("所属长期目标"), selection: $goalID) {
-                    Text(RhythmLocalization.text("暂不归属")).tag(Optional<String>.none)
-                    ForEach(store.longGoals) { goal in Text(goal.title).tag(Optional(goal.id)) }
-                }
-                TextField(RhythmLocalization.text("备注或完成标准"), text: $notes, axis: .vertical)
-                    .lineLimit(2...5)
-                Toggle(RhythmLocalization.text("设置时间跨度（可选）"), isOn: $hasTimeSpan)
-                if hasTimeSpan {
-                    DatePicker(RhythmLocalization.text("开始日期"), selection: $startDate, displayedComponents: .date)
-                    DatePicker(RhythmLocalization.text("结束日期"), selection: $endDate, in: startDate..., displayedComponents: .date)
-                }
-                Stepper(RhythmLocalization.format("预计投入：%d 分钟", estimatedMinutes), value: $estimatedMinutes, in: 5...1440, step: 5)
-                Toggle(RhythmLocalization.text("已完成"), isOn: $isCompleted)
+            ScrollView {
+                VStack(spacing: 16) {
+                    RecordSection(title: RhythmLocalization.text("行动内容")) {
+                        RecordField(title: RhythmLocalization.text("行动名称")) {
+                            TextField(RhythmLocalization.text("下一步具体做什么？"), text: $title)
+                        }
+                        Picker(RhythmLocalization.text("所属长期目标"), selection: $goalID) {
+                            Text(RhythmLocalization.text("暂不归属")).tag(Optional<String>.none)
+                            ForEach(store.longGoals) { goal in Text(goal.title).tag(Optional(goal.id)) }
+                        }
+                        RecordField(title: RhythmLocalization.text("备注或完成标准")) {
+                            TextField(RhythmLocalization.text("怎样算完成？"), text: $notes, axis: .vertical).lineLimit(2...5)
+                        }
+                    }
+                    RecordSection(title: RhythmLocalization.text("安排")) {
+                        Toggle(RhythmLocalization.text("设置时间跨度（可选）"), isOn: $hasTimeSpan)
+                        if hasTimeSpan {
+                            HStack {
+                                DatePicker(RhythmLocalization.text("开始日期"), selection: $startDate, displayedComponents: .date)
+                                DatePicker(RhythmLocalization.text("结束日期"), selection: $endDate, in: startDate..., displayedComponents: .date)
+                            }
+                        }
+                        Stepper(RhythmLocalization.format("预计投入：%d 分钟", estimatedMinutes), value: $estimatedMinutes, in: 5...1440, step: 5)
+                        Toggle(RhythmLocalization.text("已完成"), isOn: $isCompleted)
+                        Text(RhythmLocalization.text("完成行动可获得金币和鱼饵，专注时间也会归集到这里。"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding(20)
             }
-            .formStyle(.grouped)
+            Divider()
+            RecordActionBar(saveDisabled: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                            onCancel: { dismiss() }) {
+                store.saveAction(existingID: action?.id, goalID: goalID, title: title, notes: notes,
+                                 startDate: hasTimeSpan ? startDate : nil,
+                                 endDate: hasTimeSpan ? max(startDate, endDate) : nil,
+                                 estimatedMinutes: estimatedMinutes, isCompleted: isCompleted)
+                dismiss()
+            }
         }
-        .frame(minWidth: 560, idealWidth: 620, minHeight: 480, idealHeight: 520)
+        .background(RhythmTheme.panel)
+        .frame(minWidth: 590, idealWidth: 630, minHeight: 530, idealHeight: 570)
     }
 }
 

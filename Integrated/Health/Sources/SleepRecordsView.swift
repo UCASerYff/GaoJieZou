@@ -4,31 +4,45 @@ struct SleepRecordsView: View {
     @EnvironmentObject var store: AppStore
     @State private var deletion: SharedSleepEntry?
     @State private var visibleCount = 30
+    var embedded = false
+    var query = ""
+    var range = 0
+
+    private var records: [SharedSleepEntry] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -range, to: Date()) ?? .distantPast
+        return store.sleepRecords.filter {
+            (range == 0 || $0.endedAt >= cutoff) &&
+            (query.isEmpty || ($0.origin ?? "").localizedCaseInsensitiveContains(query))
+        }.sorted { $0.endedAt > $1.endedAt }
+    }
+
     var body: some View {
-        HStack(alignment:.bottom) {
-            SectionTitle(title:store.t("睡眠记录","Sleep records"),subtitle:store.t("在健康睡眠页或睡眠计时页记一次，共享同一份记录。","Record once in the health sleep page or sleep timer. Both pages share the same records."))
-            Spacer()
-            Button { store.syncSleepRewards() } label:{ Label(store.t("同步记录","Sync records"),systemImage:"arrow.triangle.2.circlepath") }
-            Button { store.newSleep(backfill:true) } label:{ Label(store.t("补记","Backfill"),systemImage:"clock.arrow.circlepath") }
-            Button { store.newSleep() } label:{ Label(store.t("记录睡眠","Record sleep"),systemImage:"plus") }.buttonStyle(.borderedProminent).tint(Theme.purple)
-        }
-        SleepSummaryCard()
-        VStack(alignment:.leading,spacing:10) {
-            Label(store.t("睡眠也能恢复活力","Sleep restores energy, too"),systemImage:"moon.stars.fill").font(.headline).foregroundStyle(Theme.purple)
-            Text(store.t("每小时恢复 3 点活力，每日最多 24 点。最近 36 小时内结束、时长 30 分钟至 24 小时的睡眠可领取一次；更早的记录仍会保留。岛屿暂停或关闭时不领奖，恢复后在有效期内自动补领。","Restore 3 energy per hour, up to 24 per day. Completed sleep of 30 minutes to 24 hours can be rewarded once within 36 hours. Older records are retained. Rewards wait while the island is paused or disabled.")).font(.callout).foregroundStyle(.secondary)
-            Text(store.t("同一份记录用于健康睡眠页、睡眠计时页和小组件。下次打开搞节奏时会刷新历史；已获得的奖励不会重复发放。","The health sleep page, sleep timer and widgets share these records. History refreshes when Gao Rhythm next opens. Earned rewards are not granted twice.")).font(.caption).foregroundStyle(.secondary)
-        }.card()
-        if let error = store.sleepSyncError {
-            Label(error,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(Theme.orange).card()
-        } else if let date = store.sleepSyncedAt {
-            Label(store.t("自动同步已开启 · 最近同步 ","Automatic sync · Updated ")+date.formatted(date:.omitted,time:.shortened),systemImage:"checkmark.circle").font(.caption).foregroundStyle(.secondary)
+        if !embedded {
+            HStack(alignment:.bottom) {
+                SectionTitle(title:store.t("睡眠记录","Sleep records"),subtitle:store.t("在健康睡眠页或睡眠计时页记一次，共享同一份记录。","Record once in the health sleep page or sleep timer. Both pages share the same records."))
+                Spacer()
+                Button { store.syncSleepRewards() } label:{ Label(store.t("同步记录","Sync records"),systemImage:"arrow.triangle.2.circlepath") }
+                Button { store.newSleep(backfill:true) } label:{ Label(store.t("补记","Backfill"),systemImage:"clock.arrow.circlepath") }
+                Button { store.newSleep() } label:{ Label(store.t("记录睡眠","Record sleep"),systemImage:"plus") }.buttonStyle(.borderedProminent).tint(Theme.purple)
+            }
+            SleepSummaryCard()
+            VStack(alignment:.leading,spacing:10) {
+                Label(store.t("睡眠也能恢复活力","Sleep restores energy, too"),systemImage:"moon.stars.fill").font(.headline).foregroundStyle(Theme.purple)
+                Text(store.t("每小时恢复 3 点活力，每日最多 24 点。最近 36 小时内结束、时长 30 分钟至 24 小时的睡眠可领取一次；更早的记录仍会保留。岛屿暂停或关闭时不领奖，恢复后在有效期内自动补领。","Restore 3 energy per hour, up to 24 per day. Completed sleep of 30 minutes to 24 hours can be rewarded once within 36 hours. Older records are retained. Rewards wait while the island is paused or disabled.")).font(.callout).foregroundStyle(.secondary)
+                Text(store.t("同一份记录用于健康睡眠页、睡眠计时页和小组件。下次打开搞节奏时会刷新历史；已获得的奖励不会重复发放。","The health sleep page, sleep timer and widgets share these records. History refreshes when Gao Rhythm next opens. Earned rewards are not granted twice.")).font(.caption).foregroundStyle(.secondary)
+            }.card()
+            if let error = store.sleepSyncError {
+                Label(error,systemImage:"exclamationmark.triangle").font(.callout).foregroundStyle(Theme.orange).card()
+            } else if let date = store.sleepSyncedAt {
+                Label(store.t("自动同步已开启 · 最近同步 ","Automatic sync · Updated ")+date.formatted(date:.omitted,time:.shortened),systemImage:"checkmark.circle").font(.caption).foregroundStyle(.secondary)
+            }
         }
         VStack(alignment:.leading,spacing:0) {
-            HStack { Text(store.t("睡眠历史","Sleep history")).font(.headline); Spacer(); Text(store.t("共 \(store.sleepRecords.count) 条","\(store.sleepRecords.count) records")).font(.caption).foregroundStyle(.secondary) }.padding(.bottom,12)
-            if store.sleepRecords.isEmpty {
-                EmptyCard(symbol:"moon.zzz.fill",title:store.t("记录一个安稳的夜晚","A place for your nights"),detail:store.t("填写睡眠小时、分钟并选择哪晚，健康睡眠页和睡眠计时页会共同显示。","Enter sleep hours and minutes, then choose the night. The health sleep page and sleep timer share the record."))
+            HStack { Text(store.t("睡眠历史","Sleep history")).font(.headline); Spacer(); Text(store.t("共 \(records.count) 条","\(records.count) records")).font(.caption).foregroundStyle(.secondary) }.padding(.bottom,12)
+            if records.isEmpty {
+                EmptyCard(symbol:"moon.zzz.fill",title:store.t("没有匹配的睡眠记录","No matching sleep records"),detail:store.t("填写睡眠小时、分钟并选择哪晚，健康睡眠页和睡眠计时页会共同显示。","Enter sleep hours and minutes, then choose the night. The health sleep page and sleep timer share the record."))
             }
-            ForEach(Array(store.sleepRecords.prefix(visibleCount))) { record in
+            ForEach(Array(records.prefix(visibleCount))) { record in
                 HStack(spacing:14) {
                     SymbolTile(symbol:"moon.stars.fill",color:Theme.purple)
                     VStack(alignment:.leading,spacing:5) {
@@ -40,9 +54,9 @@ struct SleepRecordsView: View {
                     Text(sleepDuration(record.durationSeconds,en:store.en)).font(.title3.monospacedDigit().weight(.semibold))
                     Button(role:.destructive) { deletion = record } label:{ Image(systemName:"trash") }.buttonStyle(.borderless).help(store.t("删除这条共享睡眠记录","Delete this shared sleep record"))
                 }.padding(.vertical,12)
-                Divider()
+                if record.id != records.prefix(visibleCount).last?.id { Divider().padding(.leading, 52) }
             }
-            if visibleCount < store.sleepRecords.count {
+            if visibleCount < records.count {
                 Button(store.t("显示更多","Show more")) { visibleCount += 30 }.padding(.top,12)
             }
         }.card()

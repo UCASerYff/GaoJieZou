@@ -850,50 +850,61 @@ private struct HabitEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(RhythmLocalization.text(habit == nil ? "新建打卡目标" : "编辑打卡目标")).font(.title2.weight(.semibold))
-                    Text(RhythmLocalization.text("完成一次只会领取一次金币，取消勾选不会重复领取。"))
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button(RhythmLocalization.text("取消")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Button(RhythmLocalization.text("保存")) {
-                    store.saveHabit(existingID: habit?.id, title: title, symbol: symbol, weekdays: weekdays, rewardCoins: rewardCoins)
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || weekdays.isEmpty)
-            }
-            .padding(22)
+            RecordHeader(symbol: symbol,
+                         title: RhythmLocalization.text(habit == nil ? "新建打卡目标" : "编辑打卡目标"),
+                         subtitle: RhythmLocalization.text("选择一个容易开始的小行动，每天完成一点点。"),
+                         onClose: { dismiss() })
             Divider()
-            Form {
-                TextField(RhythmLocalization.text("目标名称"), text: $title)
-                Picker(RhythmLocalization.text("图标"), selection: $symbol) {
-                    ForEach(symbols, id: \.self) { value in
-                        Label(value, systemImage: value).tag(value)
-                    }
-                }
-                Stepper(
-                    RhythmLocalization.format("完成奖励：%d 金币", rewardCoins),
-                    value: $rewardCoins,
-                    in: RhythmEconomy.habitRewardRange
-                )
-                Section(RhythmLocalization.text("重复日期")) {
-                    ForEach(dayNames, id: \.0) { day, name in
-                        Toggle(RhythmLocalization.text(name), isOn: Binding(
-                            get: { weekdays.contains(day) },
-                            set: { enabled in
-                                if enabled { weekdays.insert(day) } else { weekdays.remove(day) }
+            ScrollView {
+                VStack(spacing: 16) {
+                    RecordSection(title: RhythmLocalization.text("目标与奖励")) {
+                        RecordField(title: RhythmLocalization.text("目标名称")) {
+                            TextField(RhythmLocalization.text("例如：阅读 20 分钟"), text: $title)
+                        }
+                        Text(RhythmLocalization.text("选择图标")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 5), spacing: 10) {
+                            ForEach(symbols, id: \.self) { value in
+                                Button { symbol = value } label: {
+                                    Image(systemName: value)
+                                        .font(.system(size: 18, weight: .medium))
+                                        .foregroundStyle(symbol == value ? Color.white : RhythmTheme.morningGreen)
+                                        .frame(maxWidth: .infinity, minHeight: 42)
+                                        .background(symbol == value ? RhythmTheme.morningGreen : RhythmTheme.morningGreen.opacity(0.07),
+                                                    in: RoundedRectangle(cornerRadius: 11))
+                                }.buttonStyle(.plain)
                             }
-                        ))
+                        }
+                        Stepper(RhythmLocalization.format("完成奖励：%d 金币", rewardCoins),
+                                value: $rewardCoins, in: RhythmEconomy.habitRewardRange)
                     }
-                }
+                    RecordSection(title: RhythmLocalization.text("重复日期")) {
+                        HStack(spacing: 8) {
+                            ForEach(dayNames, id: \.0) { day, name in
+                                Button {
+                                    if weekdays.contains(day) { weekdays.remove(day) } else { weekdays.insert(day) }
+                                } label: {
+                                    Text(RhythmLocalization.text(name))
+                                        .font(.caption.weight(.medium))
+                                        .foregroundStyle(weekdays.contains(day) ? Color.white : Color.primary)
+                                        .frame(maxWidth: .infinity, minHeight: 36)
+                                        .background(weekdays.contains(day) ? RhythmTheme.morningGreen : Color.primary.opacity(0.045),
+                                                    in: RoundedRectangle(cornerRadius: 10))
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                        Text(RhythmLocalization.text("完成一次只会领取一次金币，取消勾选不会重复领取。"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding(20)
             }
-            .formStyle(.grouped)
+            Divider()
+            RecordActionBar(saveDisabled: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || weekdays.isEmpty,
+                            onCancel: { dismiss() }) {
+                store.saveHabit(existingID: habit?.id, title: title, symbol: symbol, weekdays: weekdays, rewardCoins: rewardCoins)
+                dismiss()
+            }
         }
-        .frame(minWidth: 520, idealWidth: 560, minHeight: 600, idealHeight: 650)
+        .background(RhythmTheme.panel)
+        .frame(minWidth: 540, idealWidth: 580, minHeight: 550, idealHeight: 600)
     }
 }

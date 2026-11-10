@@ -2,14 +2,14 @@ import SwiftUI
 import AppKit
 import ImageIO
 
-// Series-wide chrome theme, aligned with 搞健康 / 搞月供.
+// Morning workspace palette; map artwork keeps its own parchment ink colors.
 enum Theme {
-    static let blue = Color(red:0.20,green:0.45,blue:0.82)
-    static let teal = Color(red:0.16,green:0.63,blue:0.53)
-    static let orange = Color(red:0.92,green:0.53,blue:0.20)
-    static let purple = Color(red:0.48,green:0.36,blue:0.78)
+    static let blue = Color(red:0.29,green:0.47,blue:0.56)
+    static let teal = Color(red:0.21,green:0.36,blue:0.30)
+    static let orange = Color(red:0.79,green:0.46,blue:0.34)
+    static let purple = Color(red:0.48,green:0.40,blue:0.55)
     static func background(_ dark: Bool) -> Color {
-        Color(nsColor: dark ? NSColor(srgbRed:0.075,green:0.082,blue:0.095,alpha:1) : NSColor(srgbRed:0.975,green:0.98,blue:0.985,alpha:1))
+        Color(nsColor: dark ? NSColor(srgbRed:0.12,green:0.125,blue:0.115,alpha:1) : NSColor(srgbRed:0.957,green:0.941,blue:0.910,alpha:1))
     }
 }
 // Parchment palette, reserved for the map artwork itself (canvas, export image).
@@ -25,8 +25,14 @@ enum Ink {
 extension View {
     func card(_ padding: CGFloat = 20) -> some View {
         self.padding(padding).frame(maxWidth:.infinity,alignment:.leading)
-            .background(Color(nsColor:.controlBackgroundColor),in:RoundedRectangle(cornerRadius:14))
-            .overlay(RoundedRectangle(cornerRadius:14).stroke(Color.primary.opacity(0.07)))
+            .background(Color(nsColor:.controlBackgroundColor),in:RoundedRectangle(cornerRadius:16,style:.continuous))
+            .overlay(RoundedRectangle(cornerRadius:16,style:.continuous).stroke(Color.primary.opacity(0.065)))
+            .shadow(color:Color.black.opacity(0.035),radius:10,y:4)
+    }
+    func journalInput() -> some View {
+        self.padding(.horizontal,10).padding(.vertical,8)
+            .background(Color.primary.opacity(0.035),in:RoundedRectangle(cornerRadius:10))
+            .overlay(RoundedRectangle(cornerRadius:10).stroke(Color.primary.opacity(0.075)))
     }
 }
 // Panel keeps its call-site shape but renders as the series card.

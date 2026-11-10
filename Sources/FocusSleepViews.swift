@@ -652,7 +652,9 @@ private struct ManualSleepEditor: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            headerBar
+            RecordHeader(symbol: "moon.stars.fill", title: RhythmLocalization.text("手动录入睡眠"),
+                         subtitle: RhythmLocalization.text("记住这一晚，保存后按当前目标结算一次成长。"),
+                         accent: RhythmTheme.purple, onClose: onDismiss)
             Divider()
             ScrollView {
                 VStack(spacing: 16) {
@@ -664,32 +666,13 @@ private struct ManualSleepEditor: View {
                 }
                 .padding(22)
             }
+            Divider()
+            RecordActionBar(saveDisabled: validationError != nil, accent: RhythmTheme.purple,
+                            onCancel: onDismiss, onSave: save)
         }
-        .frame(minWidth: 480, idealWidth: 520, minHeight: 450, idealHeight: 480)
-        .onExitCommand {
-            onDismiss()
-        }
-    }
-
-    private var headerBar: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(RhythmLocalization.text("手动录入睡眠")).font(.title2.weight(.semibold))
-                Text(RhythmLocalization.text("保存后会按当前睡眠目标补算一次牧场成长与产出。"))
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(RhythmLocalization.text("取消")) { onDismiss() }
-                .keyboardShortcut(.cancelAction)
-                .accessibilityLabel(RhythmLocalization.text("取消"))
-            Button(RhythmLocalization.text("保存")) { save() }
-                .buttonStyle(.borderedProminent)
-                .tint(RhythmTheme.purple)
-                .keyboardShortcut(.defaultAction)
-                .accessibilityLabel(RhythmLocalization.text("保存"))
-                .disabled(validationError != nil)
-        }
-        .padding(22)
+        .background(RhythmTheme.panel)
+        .frame(minWidth: 520, idealWidth: 560, minHeight: 500, idealHeight: 540)
+        .onExitCommand { onDismiss() }
     }
 
     private var inputSection: some View {

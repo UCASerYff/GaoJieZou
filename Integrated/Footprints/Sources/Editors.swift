@@ -21,41 +21,61 @@ struct VisitEditor: View {
     @State private var saved = false
     @State private var dirty = false
     var body: some View {
-        VStack(alignment:.leading,spacing:18) {
-            HStack { Heading(title:request.visit == nil ? tF("记下这一次到访","Record This Visit") : tF("编辑这段足迹","Edit This Footprint")); Spacer(); Image(systemName:"mappin.and.ellipse").font(.system(size:28,weight:.light)).foregroundStyle(Theme.teal) }
-            HStack(alignment:.top,spacing:22) {
-                VStack(alignment:.leading,spacing:10) {
-                    Text(request.visit == nil ? tF("选择城市 · 可多选","Choose cities · multiple allowed") : tF("选择城市","Choose a city")).font(.headline)
-                    TextField(tF("城市名 / 英文 / 拼音","Name / English / Pinyin"),text:$query).textFieldStyle(.roundedBorder)
-                    ScrollView { LazyVStack(spacing:3) { ForEach(store.results(query,limit:100)) { city in
-                        Button {
-                            dirty=true
-                            if request.visit != nil { selected=[city.id] }
-                            else if selected.contains(city.id) { selected.remove(city.id) } else { selected.insert(city.id) }
-                        } label:{ HStack(alignment:.center) { Image(systemName:selected.contains(city.id) ? "checkmark.circle.fill" : "circle").foregroundStyle(selected.contains(city.id) ? Theme.teal : Color.secondary.opacity(0.5)); VStack(alignment:.leading,spacing:3) { Text(city.name).font(.system(size:13)); Text(store.location(city)).font(.system(size:10)).foregroundStyle(.secondary) }; Spacer(); if store.allVisitedIDs.contains(city.id) { Text(tF("去过","Visited")).font(.system(size:9)).foregroundStyle(.green) } }.padding(8).background(selected.contains(city.id) ? Theme.teal.opacity(0.08) : Color.clear,in:RoundedRectangle(cornerRadius:6)) }.buttonStyle(.plain)
-                    } } }.frame(height:300).background(Color(nsColor:.controlBackgroundColor),in:RoundedRectangle(cornerRadius:8))
-                    Text(tF("已选 \(selected.count) 个城市","\(selected.count) selected")).font(.caption).foregroundStyle(Theme.teal)
-                    ScrollView(.horizontal) { HStack { ForEach(selected.sorted(),id:\.self) { id in Button { selected.remove(id); dirty=true } label:{ Label(store.cityIndex[id]?.name ?? id,systemImage:"xmark.circle").font(.caption) }.buttonStyle(.bordered) } } }.frame(height:32)
-                }.frame(width:280)
-                VStack(alignment:.leading,spacing:14) {
-                    Text(tF("什么时候去过？","When were you there?")).font(.headline)
-                    Picker(tF("日期精度","Date precision"),selection:$precision) { ForEach(DatePrecision.allCases) { Text($0.title).tag($0) } }.labelsHidden().onChange(of:precision){ _, _ in dirty=true }
-                    if precision != .unknown {
-                        HStack { TextField(tF("年","YYYY"),text:$year).frame(width:65); Text(tF("年","")); if precision != .year { TextField(tF("月","MM"),text:$month).frame(width:38); Text(tF("月","")) }; if precision == .day { TextField(tF("日","DD"),text:$day).frame(width:38); Text(tF("日","")) } }.textFieldStyle(.roundedBorder).font(.system(size:12))
-                    } else { Text(tF("日期不必准确，回忆可以慢慢补全。","The date doesn't have to be exact; memories can be filled in later.")).font(.caption).foregroundStyle(.secondary) }
-                    Picker(tF("归入旅行","Assign to trip"),selection:$tripID) { Text(tF("独立足迹","Standalone")).tag(""); ForEach(store.journal.trips) { Text($0.name).tag($0.id) }; Text(tF("＋ 新建旅行","＋ New Trip")).tag("new") }.onChange(of:tripID){ _, _ in dirty=true }
-                    if tripID == "new" { TextField(tF("旅行名称，例如：2024 关西","Trip name, e.g. 2024 Kansai"),text:$newTrip).textFieldStyle(.roundedBorder) }
-                    Text(tF("给回忆留一句话","Leave a line for the memory")).font(.headline)
-                    TextEditor(text:$note).font(.system(size:13)).scrollContentBackground(.hidden).padding(6).frame(height:94).background(Color(nsColor:.controlBackgroundColor),in:RoundedRectangle(cornerRadius:8)).overlay(RoundedRectangle(cornerRadius:8).stroke(Color.primary.opacity(0.12))).onChange(of:note){ _, _ in if initialized { dirty=true } }
-                    HStack { Text(tF("照片 \(photos.count) / 20","Photos \(photos.count) / 20")).font(.caption); Spacer(); Button(tF("添加照片","Add Photos")){ addPhotos() }.font(.caption) }
-                    ScrollView(.horizontal) { HStack(spacing:8) { ForEach(photos,id:\.self) { id in VStack(spacing:4) { PhotoTile(url:photoURL(id),size:60); Button(tF("移除","Remove")){photos.removeAll{$0==id};dirty=true}.buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary) } } } }.frame(height:85)
-                    Text(tF("照片复制到资料库，不读取定位信息。多城市保存时，共享此次笔记和照片。","Photos are copied into the library without reading location data. When saving multiple cities, they share this note and these photos.")).font(.system(size:10)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
-                }.frame(width:330)
-            }
-            if let localError { Text(localError).foregroundStyle(.red).font(.caption).fixedSize(horizontal:false,vertical:true) }
+        VStack(spacing:0) {
+            HStack(spacing:14) {
+                Tile(symbol:"mappin.and.ellipse",color:Theme.teal)
+                VStack(alignment:.leading,spacing:4) {
+                    Text(request.visit == nil ? tF("记下这一次到访","Record This Visit") : tF("编辑这段足迹","Edit This Footprint"))
+                        .font(.system(size:23,weight:.semibold,design:.serif))
+                    Text(tF("城市、时间与照片，慢慢整理成自己的旅行手记。","Cities, dates and photos, gathered into your travel journal."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }.padding(.horizontal,24).padding(.vertical,20)
             Divider()
-            HStack { Button(tF("取消","Cancel")) { cancel() }.keyboardShortcut(.cancelAction); Spacer(); Text(tF("只有亲身到过的地方，才点亮。","Only places you've truly been to get lit up.")).font(.caption).foregroundStyle(.secondary); Button(request.visit == nil ? tF("保存足迹","Save Footprint") : tF("保存修改","Save Changes")) { save() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction).disabled(selected.isEmpty || !store.ready) }
-        }.padding(26).background(Color(nsColor:.windowBackgroundColor))
+            ScrollView {
+                VStack(alignment:.leading,spacing:16) {
+                    HStack(alignment:.top,spacing:16) {
+                        VStack(alignment:.leading,spacing:12) {
+                            Text(request.visit == nil ? tF("选择城市 · 可多选","Choose cities · multiple allowed") : tF("选择城市","Choose a city")).font(.headline)
+                            TextField(tF("城市名 / 英文 / 拼音","Name / English / Pinyin"),text:$query).textFieldStyle(.plain).journalInput()
+                            ScrollView { LazyVStack(spacing:3) { ForEach(store.results(query,limit:100)) { city in
+                                Button {
+                                    dirty=true
+                                    if request.visit != nil { selected=[city.id] }
+                                    else if selected.contains(city.id) { selected.remove(city.id) } else { selected.insert(city.id) }
+                                } label:{ HStack(alignment:.center) { Image(systemName:selected.contains(city.id) ? "checkmark.circle.fill" : "circle").foregroundStyle(selected.contains(city.id) ? Theme.teal : Color.secondary.opacity(0.5)); VStack(alignment:.leading,spacing:3) { Text(city.name).font(.system(size:13)); Text(store.location(city)).font(.system(size:10)).foregroundStyle(.secondary) }; Spacer(); if store.allVisitedIDs.contains(city.id) { Text(tF("去过","Visited")).font(.system(size:9)).foregroundStyle(Theme.teal) } }.padding(8).background(selected.contains(city.id) ? Theme.teal.opacity(0.09) : Color.clear,in:RoundedRectangle(cornerRadius:8)) }.buttonStyle(.plain)
+                            } } }.frame(height:280).background(Color.primary.opacity(0.025),in:RoundedRectangle(cornerRadius:10))
+                            Text(tF("已选 \(selected.count) 个城市","\(selected.count) selected")).font(.caption).foregroundStyle(Theme.teal)
+                            ScrollView(.horizontal) { HStack { ForEach(selected.sorted(),id:\.self) { id in Button { selected.remove(id); dirty=true } label:{ Label(store.cityIndex[id]?.name ?? id,systemImage:"xmark.circle").font(.caption) }.buttonStyle(.bordered) } } }.frame(height:32)
+                        }.frame(width:290).card(16)
+                        VStack(alignment:.leading,spacing:14) {
+                            Text(tF("什么时候去过？","When were you there?")).font(.headline)
+                            Picker(tF("日期精度","Date precision"),selection:$precision) { ForEach(DatePrecision.allCases) { Text($0.title).tag($0) } }.pickerStyle(.segmented).labelsHidden().onChange(of:precision){ _, _ in dirty=true }
+                            if precision != .unknown {
+                                HStack { TextField(tF("年","YYYY"),text:$year).frame(width:65); Text(tF("年","")); if precision != .year { TextField(tF("月","MM"),text:$month).frame(width:38); Text(tF("月","")) }; if precision == .day { TextField(tF("日","DD"),text:$day).frame(width:38); Text(tF("日","")) } }.textFieldStyle(.plain).font(.system(size:12))
+                            } else { Text(tF("日期不必准确，回忆可以慢慢补全。","The date doesn't have to be exact; memories can be filled in later.")).font(.caption).foregroundStyle(.secondary) }
+                            Picker(tF("归入旅行","Assign to trip"),selection:$tripID) { Text(tF("独立足迹","Standalone")).tag(""); ForEach(store.journal.trips) { Text($0.name).tag($0.id) }; Text(tF("＋ 新建旅行","＋ New Trip")).tag("new") }.onChange(of:tripID){ _, _ in dirty=true }
+                            if tripID == "new" { TextField(tF("旅行名称，例如：2024 关西","Trip name, e.g. 2024 Kansai"),text:$newTrip).textFieldStyle(.plain).journalInput() }
+                            Text(tF("给回忆留一句话","Leave a line for the memory")).font(.headline)
+                            TextEditor(text:$note).font(.system(size:13)).scrollContentBackground(.hidden).padding(8).frame(height:94).background(Color.primary.opacity(0.035),in:RoundedRectangle(cornerRadius:10)).overlay(RoundedRectangle(cornerRadius:10).stroke(Color.primary.opacity(0.075))).onChange(of:note){ _, _ in if initialized { dirty=true } }
+                            HStack { Text(tF("照片 \(photos.count) / 20","Photos \(photos.count) / 20")).font(.caption); Spacer(); Button(tF("添加照片","Add Photos")){ addPhotos() }.font(.caption) }
+                            ScrollView(.horizontal) { HStack(spacing:8) { ForEach(photos,id:\.self) { id in VStack(spacing:4) { PhotoTile(url:photoURL(id),size:60); Button(tF("移除","Remove")){photos.removeAll{$0==id};dirty=true}.buttonStyle(.plain).font(.caption2).foregroundStyle(.secondary) } } } }.frame(height:85)
+                            Text(tF("照片复制到资料库，不读取定位信息。多城市保存时，共享此次笔记和照片。","Photos are copied into the library without reading location data. When saving multiple cities, they share this note and these photos.")).font(.system(size:10)).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                        }.frame(width:360).card(16)
+                    }
+                    if let localError { Text(localError).foregroundStyle(.red).font(.caption).fixedSize(horizontal:false,vertical:true) }
+                }.padding(20)
+            }
+            Divider()
+            HStack {
+                Button(tF("取消","Cancel")) { cancel() }.keyboardShortcut(.cancelAction)
+                Spacer()
+                Text(tF("只有亲身到过的地方，才点亮。","Only places you've truly been to get lit up.")).font(.caption).foregroundStyle(.secondary)
+                Button(request.visit == nil ? tF("保存足迹","Save Footprint") : tF("保存修改","Save Changes")) { save() }
+                    .buttonStyle(.borderedProminent).tint(Theme.orange).keyboardShortcut(.defaultAction).disabled(selected.isEmpty || !store.ready)
+            }.padding(.horizontal,24).padding(.vertical,16)
+        }.background(Color(nsColor:.windowBackgroundColor))
         .onAppear { guard !initialized else { return }; if let v=request.visit { selected=[v.cityID]; precision=v.date.precision; year=v.date.year.map(String.init) ?? year; month=v.date.month.map(String.init) ?? "1"; day=v.date.day.map(String.init) ?? "1"; tripID=v.tripID ?? ""; note=v.note; photos=v.photoIDs; query=store.cityIndex[v.cityID]?.name ?? "" } else { if let id=request.cityID { selected=[id]; query=store.cityIndex[id]?.name ?? "" }; tripID=request.tripID ?? "" }; initialized=true; dirty=false }
         .onDisappear { if !saved { store.discardStaged(staged) } }
         .onChange(of:year) { _, _ in if initialized { dirty=true } }
@@ -127,7 +147,41 @@ struct TripEditor: View {
     let trip:Trip
     @State var name=""
     @State var note=""
-    var body:some View{VStack(alignment:.leading,spacing:20){Text(tF("旅行手记","Trip Journal")).font(.title2);TextField(tF("旅行名称","Trip name"),text:$name).textFieldStyle(.roundedBorder);Text(tF("旅行备注","Trip notes")).font(.caption);TextEditor(text:$note).frame(height:100);Text(tF("旅行日期由关联足迹自动汇总；不必为了创建旅行先填准确时间。","Trip dates are summarized automatically from linked footprints; no need to set exact dates first.")).font(.caption).foregroundStyle(.secondary);HStack{Button(tF("取消","Cancel")){dismiss()};Spacer();Button(tF("保存旅行","Save Trip")){var next=store.journal;var t=trip;t.name=name.trimmed;t.note=note.trimmed;if let i=next.trips.firstIndex(where:{$0.id==t.id}){next.trips[i]=t}else{next.trips.append(t)};if store.commit(next,message:tF("旅行已保存","Trip saved")){dismiss()}}.buttonStyle(.borderedProminent).disabled(name.trimmed.isEmpty)}}.padding(26).frame(width:430).background(Color(nsColor:.windowBackgroundColor)).onAppear{name=trip.name;note=trip.note}}
+    var body:some View {
+        VStack(spacing:0) {
+            HStack(spacing:14) {
+                Tile(symbol:"suitcase.rolling",color:Theme.orange)
+                VStack(alignment:.leading,spacing:4) {
+                    Text(tF("旅行手记","Trip Journal")).font(.system(size:23,weight:.semibold,design:.serif))
+                    Text(tF("为这一趟旅程，留一页自己的序言。","A page for the story of this journey.")).font(.caption).foregroundStyle(.secondary)
+                }
+            }.padding(22)
+            Divider()
+            VStack(alignment:.leading,spacing:16) {
+                VStack(alignment:.leading,spacing:7) {
+                    Text(tF("旅行名称","Trip name")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    TextField(tF("例如：春日关西","e.g. Spring in Kansai"),text:$name).textFieldStyle(.plain).journalInput()
+                }
+                VStack(alignment:.leading,spacing:7) {
+                    Text(tF("旅行备注","Trip notes")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                    TextEditor(text:$note).scrollContentBackground(.hidden).padding(8).frame(height:120)
+                        .background(Color.primary.opacity(0.035),in:RoundedRectangle(cornerRadius:10))
+                        .overlay(RoundedRectangle(cornerRadius:10).stroke(Color.primary.opacity(0.075)))
+                }
+                Text(tF("旅行日期由关联足迹自动汇总；不必为了创建旅行先填准确时间。","Trip dates are summarized automatically from linked footprints; no need to set exact dates first.")).font(.caption).foregroundStyle(.secondary)
+            }.padding(22)
+            Divider()
+            HStack {
+                Button(tF("取消","Cancel")){dismiss()}.keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(tF("保存旅行","Save Trip")){
+                    var next=store.journal;var t=trip;t.name=name.trimmed;t.note=note.trimmed
+                    if let i=next.trips.firstIndex(where:{$0.id==t.id}){next.trips[i]=t}else{next.trips.append(t)}
+                    if store.commit(next,message:tF("旅行已保存","Trip saved")){dismiss()}
+                }.buttonStyle(.borderedProminent).tint(Theme.orange).keyboardShortcut(.defaultAction).disabled(name.trimmed.isEmpty)
+            }.padding(18)
+        }.frame(width:480).background(Color(nsColor:.windowBackgroundColor)).onAppear{name=trip.name;note=trip.note}
+    }
 }
 struct CustomCityEditor:View{
     @EnvironmentObject var store:Store

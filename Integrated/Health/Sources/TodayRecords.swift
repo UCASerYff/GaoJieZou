@@ -137,6 +137,122 @@ struct RecordsView: View {
     }
 }
 
+enum HealthRecordFilter: String, CaseIterable, Identifiable {
+    case all, water, sleep, meals, exercise, weight
+    var id: String { rawValue }
+    var kind: RecordKind? {
+        switch self {
+        case .water: .water
+        case .meals: .meal
+        case .exercise: .exercise
+        case .weight: .weight
+        case .all, .sleep: nil
+        }
+    }
+    func title(_ en: Bool) -> String {
+        switch self {
+        case .all: en ? "All" : "全部"
+        case .sleep: en ? "Sleep" : "睡眠"
+        default: kind?.title(en) ?? ""
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .all: "square.stack.3d.up.fill"
+        case .sleep: "moon.stars.fill"
+        default: kind?.symbol ?? "tray"
+        }
+    }
+}
+
+/// One journal surface for every health record. Sleep remains backed by the
+/// shared sleep store and uses its existing editor and deletion behavior.
+struct AllHealthRecordsView: View {
+    @EnvironmentObject var store: AppStore
+    @State private var filter: HealthRecordFilter
+    @State private var query = ""
+    @State private var range = 30
+    @State private var page = 0
+
+    init(initialFilter: HealthRecordFilter = .all) {
+        _filter = State(initialValue: initialFilter)
+    }
+
+    private var results: [HealthRecord] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -range, to: Date()) ?? .distantPast
+        return store.state.records.filter {
+            (filter.kind == nil || $0.kind == filter.kind) &&
+            (range == 0 || $0.occurredAt >= cutoff) &&
+            (query.isEmpty || ($0.title + " " + $0.note).localizedCaseInsensitiveContains(query))
+        }.sorted { $0.occurredAt > $1.occurredAt }
+    }
+
+    var body: some View {
+        HStack(alignment: .bottom) {
+            SectionTitle(title: store.t("全部记录", "All records"),
+                         subtitle: store.t("按类型找到每一笔，修改和删除仍走原来的记录。",
+                                           "Find any entry by type. Edit and delete use the original records."))
+            Spacer()
+            Button { create(backfill: true) } label: { Label(store.t("补记", "Backfill"), systemImage: "clock.arrow.circlepath") }
+            Button { create(backfill: false) } label: { Label(store.t("记一笔", "Record"), systemImage: "plus") }
+                .buttonStyle(.borderedProminent).tint(Theme.teal)
+        }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(HealthRecordFilter.allCases) { item in
+                    Button { filter = item } label: {
+                        Label(item.title(store.en), systemImage: item.symbol)
+                            .font(.callout.weight(.medium))
+                            .padding(.horizontal, 13).padding(.vertical, 8)
+                            .background(filter == item ? Theme.teal : Theme.teal.opacity(0.07), in: Capsule())
+                            .foregroundStyle(filter == item ? Color.white : Color.primary)
+                    }.buttonStyle(.plain)
+                }
+            }
+        }
+        HStack {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(store.t("搜索名称或备注", "Search names or notes"), text: $query)
+                .textFieldStyle(.plain)
+            Spacer()
+            Picker("", selection: $range) {
+                Text(store.t("近 7 天", "7 days")).tag(7)
+                Text(store.t("近 30 天", "30 days")).tag(30)
+                Text(store.t("全部时间", "All time")).tag(0)
+            }.frame(width: 130)
+        }.padding(12).background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        if filter != .sleep {
+            VStack(spacing: 0) {
+                if results.isEmpty && filter != .all {
+                    EmptyCard(symbol: "tray", title: store.t("还没有匹配的记录", "No matching records"),
+                              detail: store.t("调整类型或时间范围，也可以现在记一笔。", "Change the filters or add a record now."))
+                } else {
+                    let shown = Array(results.dropFirst(page * 100).prefix(100))
+                    ForEach(shown) { record in
+                        RecordRow(record: record)
+                        if record.id != shown.last?.id { Divider().padding(.leading, 58) }
+                    }
+                }
+            }.card(12)
+            GQHistoryPager(page: $page, count: results.count)
+        }
+        if filter == .all || filter == .sleep {
+            SleepRecordsView(embedded: true, query: query, range: range)
+        }
+        Text(store.t("普通健康记录共 \(results.count) 条 · 睡眠来自共享睡眠记录",
+                     "\(results.count) health records · Sleep comes from the shared sleep journal"))
+            .font(.caption).foregroundStyle(.secondary)
+            .onChange(of: query) { _, _ in page = 0 }
+            .onChange(of: range) { _, _ in page = 0 }
+            .onChange(of: filter) { _, _ in page = 0 }
+    }
+
+    private func create(backfill: Bool) {
+        if filter == .sleep { store.newSleep(backfill: backfill) }
+        else { store.new(filter.kind ?? .meal, backfill: backfill) }
+    }
+}
+
 struct BackfillRecordMenu: View {
     @EnvironmentObject var store: AppStore
     var body: some View {

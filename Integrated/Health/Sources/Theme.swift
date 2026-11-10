@@ -2,14 +2,14 @@ import SwiftUI
 import AppKit
 
 enum Theme {
-    static let blue = Color(red:0.20,green:0.45,blue:0.82)
-    static let teal = Color(red:0.16,green:0.63,blue:0.53)
-    static let green = Color(red:0.24,green:0.62,blue:0.36)
-    static let orange = Color(red:0.92,green:0.53,blue:0.20)
-    static let purple = Color(red:0.48,green:0.36,blue:0.78)
+    static let blue = Color(red:0.29,green:0.47,blue:0.56)
+    static let teal = Color(red:0.21,green:0.36,blue:0.30)
+    static let green = Color(red:0.35,green:0.50,blue:0.31)
+    static let orange = Color(red:0.79,green:0.46,blue:0.34)
+    static let purple = Color(red:0.48,green:0.40,blue:0.55)
     static func color(_ kind: RecordKind) -> Color { switch kind { case .water: blue; case .meal: orange; case .exercise: green; case .weight: purple } }
     static func background(_ dark: Bool,_ hex: String) -> Color {
-        let base = dark ? NSColor(srgbRed:0.075,green:0.082,blue:0.095,alpha:1) : NSColor(srgbRed:0.975,green:0.98,blue:0.985,alpha:1)
+        let base = dark ? NSColor(srgbRed:0.12,green:0.125,blue:0.115,alpha:1) : NSColor(srgbRed:0.957,green:0.941,blue:0.910,alpha:1)
         guard let v=UInt32(hex.replacingOccurrences(of:"#",with:""),radix:16),hex.count==7 else { return Color(nsColor:base) }
         let tint=NSColor(srgbRed:Double((v>>16)&255)/255,green:Double((v>>8)&255)/255,blue:Double(v&255)/255,alpha:1)
         return Color(nsColor:base.blended(withFraction:0.28,of:tint) ?? base)
@@ -18,8 +18,9 @@ enum Theme {
 extension View {
     func card(_ padding: CGFloat = 20) -> some View {
         self.padding(padding).frame(maxWidth:.infinity,alignment:.leading)
-            .background(Color(nsColor:.controlBackgroundColor),in:RoundedRectangle(cornerRadius:14))
-            .overlay(RoundedRectangle(cornerRadius:14).stroke(Color.primary.opacity(0.07)))
+            .background(Color(nsColor:.controlBackgroundColor),in:RoundedRectangle(cornerRadius:16,style:.continuous))
+            .overlay(RoundedRectangle(cornerRadius:16,style:.continuous).stroke(Color.primary.opacity(0.065)))
+            .shadow(color:Color.black.opacity(0.035),radius:10,y:4)
     }
 }
 struct SymbolTile: View {

@@ -51,6 +51,7 @@ extension RhythmSection {
     var healthPage: HealthNavigationPage? {
         switch self {
         case .healthOverview: .overview
+        case .healthRecords: .records
         case .healthEvents: .events
         case .healthWater: .water
         case .healthSleep: .sleep
@@ -66,6 +67,7 @@ extension RhythmSection {
     init(healthPage: HealthNavigationPage) {
         self = switch healthPage {
         case .overview: .healthOverview
+        case .records: .healthRecords
         case .events: .healthEvents
         case .water: .healthWater
         case .sleep: .healthSleep

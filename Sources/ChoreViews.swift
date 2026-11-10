@@ -154,51 +154,48 @@ private struct ChoreEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State var draft: Chore
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(RhythmLocalization.text("一些琐事")).font(.title2.bold())
-            TextField(RhythmLocalization.text("琐事名称"), text: $draft.title)
-            DatePicker(RhythmLocalization.text("开始日期"), selection: $draft.startDate, displayedComponents: .date)
-            DatePicker(RhythmLocalization.text("结束日期"), selection: $draft.endDate, displayedComponents: .date)
-            VStack(alignment: .leading, spacing: 9) {
-                Text(RhythmLocalization.text("显示颜色")).font(.callout.weight(.medium))
-                HStack(spacing: 8) {
-                    ForEach(Array(RhythmTheme.choreColors.enumerated()), id: \.element.id) { _, option in
-                        Button {
-                            draft.colorHex = option.hex
-                        } label: {
-                            ZStack {
-                                Circle().fill(option.color).frame(width: 24, height: 24)
-                                if draft.colorHex == option.hex {
-                                    Image(systemName: "checkmark")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(.white)
-                                }
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .help(RhythmLocalization.text(option.title))
+        VStack(spacing: 0) {
+            RecordHeader(symbol: "tray.full.fill", title: RhythmLocalization.text("记下一件琐事"),
+                         subtitle: RhythmLocalization.text("把事情放下，完成时再轻松打勾。"),
+                         accent: RhythmTheme.choreColor(hex: draft.colorHex), onClose: { dismiss() })
+            Divider()
+            VStack(spacing: 16) {
+                RecordSection(title: RhythmLocalization.text("琐事内容")) {
+                    RecordField(title: RhythmLocalization.text("琐事名称")) {
+                        TextField(RhythmLocalization.text("要做什么？"), text: $draft.title)
                     }
-                    ColorPicker(RhythmLocalization.text("自定义"), selection: Binding(
-                        get: { RhythmTheme.choreColor(hex: draft.colorHex) },
-                        set: { draft.colorHex = RhythmTheme.hex(for: $0) }
-                    ), supportsOpacity: false)
-                    .labelsHidden()
-                    .help(RhythmLocalization.text("自定义颜色"))
+                    HStack(spacing: 14) {
+                        DatePicker(RhythmLocalization.text("开始日期"), selection: $draft.startDate, displayedComponents: .date)
+                        DatePicker(RhythmLocalization.text("结束日期"), selection: $draft.endDate, displayedComponents: .date)
+                    }
                 }
-            }
-            if draft.endDate < draft.startDate {
-                Text(RhythmLocalization.text("结束日期不能早于开始日期")).foregroundStyle(.red)
-            }
-            HStack {
-                Button(RhythmLocalization.text("取消")) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                Spacer()
-                Button(RhythmLocalization.text("保存")) { store.saveChore(draft); dismiss() }
-                    .buttonStyle(.borderedProminent)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.endDate < draft.startDate)
-            }
+                RecordSection(title: RhythmLocalization.text("显示颜色")) {
+                    HStack(spacing: 10) {
+                        ForEach(Array(RhythmTheme.choreColors.enumerated()), id: \.element.id) { _, option in
+                            Button { draft.colorHex = option.hex } label: {
+                                ZStack {
+                                    Circle().fill(option.color).frame(width: 28, height: 28)
+                                    if draft.colorHex == option.hex {
+                                        Image(systemName: "checkmark").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
+                                    }
+                                }
+                            }.buttonStyle(.plain).help(RhythmLocalization.text(option.title))
+                        }
+                        ColorPicker(RhythmLocalization.text("自定义"), selection: Binding(
+                            get: { RhythmTheme.choreColor(hex: draft.colorHex) },
+                            set: { draft.colorHex = RhythmTheme.hex(for: $0) }
+                        ), supportsOpacity: false).labelsHidden().help(RhythmLocalization.text("自定义颜色"))
+                    }
+                }
+                if draft.endDate < draft.startDate {
+                    Text(RhythmLocalization.text("结束日期不能早于开始日期")).foregroundStyle(.red).font(.callout)
+                }
+            }.padding(20)
+            Divider()
+            RecordActionBar(saveDisabled: draft.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.endDate < draft.startDate,
+                            onCancel: { dismiss() }) { store.saveChore(draft); dismiss() }
         }
-        .padding(24).frame(minWidth: 400, idealWidth: 440)
+        .background(RhythmTheme.panel)
+        .frame(minWidth: 480, idealWidth: 520)
     }
 }

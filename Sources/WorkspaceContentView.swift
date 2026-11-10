@@ -136,7 +136,7 @@ struct ContentView: View {
                 FishingHubView()
             case .collection:
                 CollectionView()
-            case .healthOverview, .healthEvents, .healthWater, .healthSleep, .healthMeals,
+            case .healthOverview, .healthRecords, .healthEvents, .healthWater, .healthSleep, .healthMeals,
                  .healthExercise, .healthWeight, .healthTrends, .healthIsland:
                 IntegratedHealthView(section: selection, route: route, routeRevision: routeRevision) { selection = $0 }
             case .footprintsMap, .footprintsTrips, .footprintsTimeline, .footprintsResidentCity, .footprintsTrain:
