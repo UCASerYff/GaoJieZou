@@ -15,10 +15,7 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     EmptyCard(symbol: "externaldrive.badge.exclamationmark",
                               title: store.t("暂时无法读取数据", "Data unavailable"), detail: fatal)
-                    HStack {
-                        Button(store.t("重试", "Retry")) { store.reload() }
-                        Button(store.t("从备份恢复", "Restore backup")) { store.restore() }
-                    }
+                    Button(store.t("重试", "Retry")) { store.reload() }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {

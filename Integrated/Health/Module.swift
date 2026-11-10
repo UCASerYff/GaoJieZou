@@ -113,8 +113,6 @@ private struct ActiveHealthModuleView: View {
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.new"))) { _ in store.new(.meal) }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.water"))) { _ in store.addWater() }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.sleep"))) { _ in store.newSleep() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.export"))) { _ in store.backup() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.import"))) { _ in store.restore() }
     }
     private var contentPage: HealthNavigationPage {
         // With a host callback, its page is authoritative even on the first
@@ -141,9 +139,7 @@ private struct ActiveHealthModuleView: View {
               route.scheme == "gaojiezou", route.host == "health" else { return }
         HealthRuntime.handledRouteRevision = routeRevision
         let destination = route.path.split(separator: "/").first.map(String.init) ?? ""
-        if destination == "export" { store.backup() }
-        else if destination == "import" { store.restore() }
-        else if destination == "sleep" { select(.sleep) }
+        if destination == "sleep" { select(.sleep) }
         else if destination == "events" { select(.events) }
         else if destination == "records" { select(.records) }
         else if destination == "island" || destination == "game" { select(.island) }
@@ -188,14 +184,6 @@ private struct ActiveHealthSettingsView: View {
 }
 
 @MainActor public enum HealthModuleRuntime {
-    /// Host calls before ANY store is opened. Old source pending jobs are never replayed.
-    public static func applyPendingRestoreBeforeOpening() throws {
-        guard FileManager.default.fileExists(atPath: AppBackupRestore.pending.path) else { return }
-        guard !HealthRuntimeOpening.didOpen else { throw CocoaError(.fileWriteNoPermission) }
-        try AppBackupRestore.applyPending()
-    }
-    public static func exportModuleBackup() { HealthRuntime.store.backup() }
-    public static func restoreModuleBackup() { HealthRuntime.store.restore() }
     public static func syncSleep() {
         guard RhythmIntegrationPaths.isActive else { return }
         do { try HealthPreferences.prepare() } catch { return }

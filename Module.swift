@@ -83,13 +83,6 @@ public struct RhythmModuleView: View {
             .onReceive(DistributedNotificationCenter.default().publisher(for:Notification.Name("GaoSeries.health.sleepReward"))) { note in
                 NotificationCenter.default.post(name:note.name,object:nil,userInfo:note.userInfo)
             }
-            // 备份导出/恢复收拢到 app 级「数据」页：模块内入口已移除，能力经通知触发。
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.rhythm.export"))) { _ in
-                store.exportFullBackup()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.rhythm.import"))) { _ in
-                store.restoreFullBackup()
-            }
     }
 }
 

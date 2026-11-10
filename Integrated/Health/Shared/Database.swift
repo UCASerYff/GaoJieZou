@@ -69,7 +69,7 @@ final class HealthDatabase {
             // A missing database beside backups or an initialization marker is lost
             // data, not a first launch. Only a truly empty location may initialize.
             if FileManager.default.fileExists(atPath:self.directory.path) {
-                guard try FileManager.default.contentsOfDirectory(atPath:self.directory.path).isEmpty else { throw HealthError("原健康资料库缺失，请从备份恢复 / Existing health database missing; restore a backup") }
+                guard try FileManager.default.contentsOfDirectory(atPath:self.directory.path).isEmpty else { throw HealthError("原健康资料库缺失，已停止写入以保护目录内容 / Existing health database missing; writes stopped to protect the directory") }
             }
             try FileManager.default.createDirectory(at:self.directory,withIntermediateDirectories:true)
         }
@@ -133,7 +133,7 @@ final class HealthDatabase {
     private func core(_ state: HealthState) -> HealthState { var c = state; c.records = []; c.events = []; return c }
     private func decodeState(_ data: Data) throws -> HealthState {
         do { return try JSONDecoder().decode(HealthState.self,from:data) }
-        catch { throw HealthError("存档读取失败，原文件已保留。请从备份恢复。 / Save unreadable; original retained. Restore a backup.\n\(error.localizedDescription)") }
+        catch { throw HealthError("存档读取失败，原文件已保留，已停止写入。 / Save unreadable; original retained and writes stopped.\n\(error.localizedDescription)") }
     }
     private func readBlob() throws -> Data {
         var statement: OpaquePointer?
@@ -229,7 +229,7 @@ final class HealthDatabase {
             return Snapshot(state:state,revision:revision)
         } catch {
             if ownsTransaction { try? execute("ROLLBACK") }
-            throw HealthError("存档读取失败，原文件已保留。请从备份恢复。 / Save unreadable; original retained. Restore a backup.\n\(error.localizedDescription)")
+            throw HealthError("存档读取失败，原文件已保留，已停止写入。 / Save unreadable; original retained and writes stopped.\n\(error.localizedDescription)")
         }
     
         }
@@ -276,22 +276,6 @@ final class HealthDatabase {
         let state = try JSONDecoder().decode(HealthState.self,from:backup.payload)
         try Engine.validate(state)
         return (state,backup.createdAt)
-    }
-    func automaticBackup() throws {
-        return try withProductionLease {
-        try requireAuthority()
-        guard !isReadOnly else { throw HealthError("此连接只读 / This database connection is read only") }
-        // A consistent read snapshot; a failed backup never changes health records.
-        let state = try read(); let day = Engine.day(Date(),state)
-        let folder = directory.appendingPathComponent("Backups")
-        try FileManager.default.createDirectory(at:folder,withIntermediateDirectories:true)
-        let target = folder.appendingPathComponent("daily-\(day).healthbackup")
-        guard !FileManager.default.fileExists(atPath:target.path) else { return }
-        try backupData(state).write(to:target,options:.atomic)
-        let daily = try FileManager.default.contentsOfDirectory(at:folder,includingPropertiesForKeys:nil).filter { $0.lastPathComponent.hasPrefix("daily-") }.sorted { $0.lastPathComponent > $1.lastPathComponent }
-        for file in daily.dropFirst(7) { try FileManager.default.removeItem(at:file) }
-    
-        }
     }
     func restore(_ state: HealthState) throws {
         return try withProductionLease {

@@ -87,7 +87,6 @@ import UniformTypeIdentifiers
         guard let db else { message = fatalError; return false }
         do {
             state = try db.transaction(request:request,op)
-            do { try db.automaticBackup() } catch { notice = t("记录已保存，自动备份失败，可在设置中手动备份。","Saved; automatic backup failed. Use manual backup in Settings.") }
             return true
         } catch { message = error.localizedDescription; return false }
     }
@@ -225,26 +224,6 @@ import UniformTypeIdentifiers
     func preferences(_ op: (inout Preferences)->Void) {
         _ = update { s in Engine.settle(&s,now:Date()); op(&s.preferences); s.island.lastSettled=Date(); s.island.lastVisit=Date() }
     }
-    func backup() {
-        guard let db else { return }
-        let panel=NSSavePanel(); panel.nameFieldStringValue="搞健康-\(Engine.day(Date(),state)).healthbackup"; panel.allowedContentTypes=[.data]
-        if panel.runModal() == .OK, let url=panel.url {
-            do { try db.backupData(try db.read()).write(to:url,options:.atomic); notice=t("完整备份已保存。","Full backup saved.") }
-            catch { message=error.localizedDescription }
-        }
-    }
-    func restore() {
-        let panel=NSOpenPanel(); panel.canChooseDirectories=false; panel.allowsMultipleSelection=false
-        guard panel.runModal() == .OK,let url=panel.url,let db else { return }
-        do {
-            let (saved,date)=try HealthDatabase.decodeBackup(Data(contentsOf:url))
-            let alert=NSAlert(); alert.messageText=t("恢复完整备份？","Restore full backup?")
-            alert.informativeText="\(date.formatted()) · \(saved.records.count) " + t("条记录。将替换当前全部记录与岛屿，恢复前自动保留当前备份。","records. Replaces all current records and island. Current data is backed up first.")
-            alert.addButton(withTitle:t("恢复","Restore")); alert.addButton(withTitle:t("取消","Cancel"))
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            try db.restore(saved); reload(); undoEvent=nil; undoRecord=nil; WidgetCenter.shared.reloadAllTimelines(); notice=t("备份已恢复。","Backup restored.")
-        } catch { message=error.localizedDescription }
-    }
     func exportCSV() {
         let panel=NSOpenPanel(); panel.canChooseDirectories=true; panel.canChooseFiles=false; panel.canCreateDirectories=true
         guard panel.runModal() == .OK,let url=panel.url else { return }
@@ -282,12 +261,11 @@ import UniformTypeIdentifiers
     func reset(all: Bool) {
         let alert=NSAlert(); alert.alertStyle = .warning
         alert.messageText=all ? t("删除全部健康资料？","Delete all health data?") : t("重新开始岛屿？","Reset your island?")
-        alert.informativeText=all ? t("将删除健康记录、岛屿和健康自动备份。共同睡眠、节奏、足迹与外部导出文件保留；必要奖励去重标记保留，旧记录不会重新发奖。此操作不可撤销。","Deletes health records, island and health backups. Shared sleep, Rhythm, Footprints and external exports remain. Reward deduplication markers remain so old entries grant no new rewards. Cannot be undone.") : t("健康记录与模板保留。岛屿归零；今日已领取的奖励额度保留，旧记录不会重新发奖。","Keeps health records, templates and today's reward limits. Resets island progress.")
+        alert.informativeText=all ? t("将删除健康记录与岛屿。共同睡眠、节奏、足迹与外部导出文件保留；必要奖励去重标记保留，旧记录不会重新发奖。此操作不可撤销。","Deletes health records and island. Shared sleep, Rhythm, Footprints and external exports remain. Reward deduplication markers remain so old entries grant no new rewards. Cannot be undone.") : t("健康记录与模板保留。岛屿归零；今日已领取的奖励额度保留，旧记录不会重新发奖。","Keeps health records, templates and today's reward limits. Resets island progress.")
         alert.addButton(withTitle:t("取消","Cancel")); alert.addButton(withTitle:all ? t("删除全部","Delete all") : t("重置岛屿","Reset island"))
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         if all {
             do { try db?.erase(); reload(); undoEvent=nil; undoRecord=nil; WidgetCenter.shared.reloadAllTimelines() } catch { message=error.localizedDescription }
         } else { _ = update { s in let rewarded = s.island.rewardedSleepIDs; s.island=Island(); s.island.rewardedSleepIDs=rewarded; for i in s.records.indices { s.records[i].rewardEligible=false } }; undoRecord=nil }
     }
-    func openBackups() { if let db { NSWorkspace.shared.open(db.directory.appendingPathComponent("Backups")) } }
 }

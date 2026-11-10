@@ -12,11 +12,11 @@ SOURCES=(
 )
 FILES=()
 for SOURCE in $SOURCES; do FILES+=("$ROOT/Sources/$SOURCE.swift"); done
-swiftc -swift-version 5 -parse-as-library -D WIDGET_SYNC_TEST \
+swiftc -swift-version 5 -parse-as-library -D WIDGET_SYNC_TEST -D INTEGRATION_PATH_TEST \
     -sdk "$SDK" -target arm64-apple-macosx14.0 \
     -module-cache-path "$TEST_BUILD/cache" \
     -framework AppKit -framework SwiftUI -framework Combine -framework WidgetKit \
     -framework UserNotifications -framework CryptoKit -lsqlite3 \
-    $FILES "$ROOT/WidgetExtension/WidgetData.swift" "$ROOT/WidgetExtension/WidgetTimeline.swift" \
+    "$ROOT/Integration/Shared/IntegrationAuthority.swift" $FILES "$ROOT/WidgetExtension/WidgetData.swift" "$ROOT/WidgetExtension/WidgetTimeline.swift" \
     "$ROOT/Tests/WidgetSyncRegression.swift" -o "$TEST_BUILD/widget-sync-regression"
 "$TEST_BUILD/widget-sync-regression"

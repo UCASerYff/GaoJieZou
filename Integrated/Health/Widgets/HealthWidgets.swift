@@ -19,7 +19,6 @@ struct QuickWaterIntent: AppIntent {
             try Engine.save(&state,record:r,now:now)
         }
         // Successful database commits publish and notify both widget kinds and App.
-        try? db.automaticBackup()
         return .result()
     }
 }
@@ -241,7 +240,6 @@ struct LogHealthEventIntent: AppIntent {
         try db.transaction(request:"widget-event-"+UUID().uuidString,now:now) { s in
             var e=HealthEvent(typeID:id); e.source="widget"; e.occurredAt=now; try EventLog.save(&s,e,now:now)
         }
-        try? db.automaticBackup()
         return .result()
     }
 }

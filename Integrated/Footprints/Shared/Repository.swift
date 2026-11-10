@@ -33,7 +33,6 @@ final class Repository {
     private var openedDevice: UInt64?
     private var openedInode: UInt64?
     var photos: URL { root.appendingPathComponent("Photos", isDirectory: true) }
-    var snapshots: URL { root.appendingPathComponent("Snapshots", isDirectory: true) }
     init(root: URL, readOnly: Bool = false, requiresIntegrationAuthority: Bool = false) throws {
         self.root = root
         self.readOnly = readOnly
@@ -78,7 +77,6 @@ final class Repository {
             if !readOnly {
                 try sql("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;")
                 try fm.createDirectory(at: photos, withIntermediateDirectories: true)
-                try fm.createDirectory(at: snapshots, withIntermediateDirectories: true)
             }
             let attributes = try fm.attributesOfItem(atPath: database.path)
             guard let device = attributes[.systemNumber] as? NSNumber,
@@ -259,17 +257,6 @@ final class Repository {
             }
             try save(backup.journal)
         } catch { for url in created { try? FileManager.default.removeItem(at: url) }; throw error }
-    }
-    func dailySnapshot(_ data: Journal) throws {
-        try withWriteAccess { try writeDailySnapshot(data) }
-    }
-    private func writeDailySnapshot(_ data: Journal) throws {
-        guard !readOnly else { throw AppFailure("资料库以只读方式打开，不能写入快照。") }
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"
-        let url = snapshots.appendingPathComponent(f.string(from: Date()) + ".json")
-        if !FileManager.default.fileExists(atPath: url.path) { try encoder.encode(data).write(to: url, options: .atomic) }
-        let files = try FileManager.default.contentsOfDirectory(at: snapshots, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent }
-        for old in files.dropFirst(7) { try FileManager.default.removeItem(at: old) }
     }
     static func csv(_ journal: Journal, cities: [String: City]) -> String {
         func escape(_ value: String) -> String {

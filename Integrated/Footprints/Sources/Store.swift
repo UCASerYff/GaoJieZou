@@ -153,7 +153,6 @@ import ImageIO
             let newCountries = Set(next.visits.compactMap { newIndex[$0.cityID]?.countryID }).subtracting(previousCountries).filter { $0 != "ATA" }.sorted()
             undoState = journal; undoAvailable = true; journal = next; rebuildIndex(); toast = message
             if let first = newCountries.first { celebration = countries[first]?.name ?? first }
-            do { try repo.dailySnapshot(next) } catch { self.error = tF("记录已保存，但自动快照失败：","Saved, but the automatic snapshot failed: ") + "\(error.localizedDescription)" }
             WidgetExporter.publish(store: self)
             if soundEnabled { NSSound(named: "Pop")?.play() }
             return true
@@ -256,19 +255,6 @@ import ImageIO
         if panel.runModal() == .OK, let url = panel.url {
             do { try data().write(to: url, options: .atomic); toast = tF("已导出：","Exported: ") + "\(url.lastPathComponent)" } catch { self.error = error.localizedDescription }
         }
-    }
-    func exportBackup() { guard let repo else { return }; saveFile(name:"\(tF("搞足迹","GaoFootprints"))-\(Date().formatted(.iso8601.year().month().day())).footprintsbackup",type:UTType(filenameExtension:"footprintsbackup") ?? .data) { try repo.makeBackup(journal) } }
-    func restoreBackup() {
-        guard ready, let repo else { error=tF("资料库当前不可写，请先保留原资料库并修复读取错误。","The library is not writable right now; please keep the original library and fix the read error first."); return }
-        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false; panel.allowedContentTypes = [UTType(filenameExtension:"footprintsbackup") ?? .data]
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let backup = try repo.inspectBackup(url, geography: geography)
-            let alert = NSAlert(); alert.messageText = tF("恢复这份备份？","Restore this backup?"); alert.informativeText = tF("备份包含 \(backup.journal.visits.count) 条足迹、\(backup.journal.trips.count) 次旅行、\(backup.photos.count) 张照片。\n将整体替换当前资料库；当前数据会先保存为恢复前备份。","The backup contains \(backup.journal.visits.count) footprints, \(backup.journal.trips.count) trips and \(backup.photos.count) photos.\nIt will replace the current library entirely; current data is first saved as a pre-restore backup."); alert.addButton(withTitle:tF("恢复并替换","Restore & Replace")); alert.addButton(withTitle:tF("取消","Cancel"))
-            guard alert.runModal() == .alertFirstButtonReturn else { return }
-            try repo.restore(backup, current: journal); journal = backup.journal; rebuildIndex(); ready = true; undoState = nil; undoAvailable = false; year = 0; tripFilter = ""; selectedCity = nil; toast = tF("已恢复备份，原数据备份保留在资料库中","Backup restored; a backup of the previous data is kept in the library")
-            WidgetExporter.publish(store: self)
-        } catch { self.error = error.localizedDescription }
     }
     func alertDelete(_ action: () -> Void, title: String, detail: String) {
         let a = NSAlert(); a.messageText = title; a.informativeText = detail; a.addButton(withTitle:tF("删除","Delete")); a.addButton(withTitle:tF("取消","Cancel"))

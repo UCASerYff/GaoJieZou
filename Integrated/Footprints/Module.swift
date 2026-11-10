@@ -44,7 +44,6 @@ private struct FootprintsActivationGate<Content: View>: View {
         }
         .task(id: attempt) { @MainActor in
             do {
-                try FootprintsModuleRuntime.applyPendingRestoreBeforeOpening()
                 try FootprintsPreferences.prepare()
                 failure = nil; ready = true
             } catch { ready = false; failure = error.localizedDescription }
@@ -135,8 +134,6 @@ private struct ActiveFootprintsModuleView: View {
                 select(.map); focusSearch()
             }
             .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.undo"))) { _ in store.undo() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.export"))) { _ in store.exportBackup() }
-            .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.footprints.import"))) { _ in store.restoreBackup() }
     }
 
     private func select(_ destination: FootprintsNavigationPage) {
@@ -164,8 +161,6 @@ private struct ActiveFootprintsModuleView: View {
             select(.map)
             focusSearch()
         case "undo": store.undo()
-        case "export": store.exportBackup()
-        case "import": store.restoreBackup()
         default:
             select(.map)
             let scope = URLComponents(url: route, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "scope" }?.value
@@ -207,15 +202,6 @@ public struct FootprintsPublicationReceipt: Codable {
 }
 
 @MainActor public enum FootprintsModuleRuntime {
-    public static func exportModuleBackup() { FootprintsRuntime.store.exportBackup() }
-    public static func restoreModuleBackup() { FootprintsRuntime.store.restoreBackup() }
-
-    /// Root invokes this before initializing any integrated Store. Only the new
-    /// host's recovery jobs are eligible; source jobs remain archived/blocked.
-    public static func applyPendingRestoreBeforeOpening() throws {
-        try AppBackupRestore.applyPending()
-    }
-
     /// Headless installer/runtime bridge, with no game settlement or GUI.
     /// The source Repository is read-only and every photo is checked.
     public static func publishSavedSnapshot(requireHostStopped: Bool = true) throws -> FootprintsPublicationReceipt {

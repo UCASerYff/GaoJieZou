@@ -11,23 +11,6 @@ import RhythmFootprints
     @State private var menuBarInserted = true
 
     init() {
-        do { try AppBackupRestore.applyPending() } catch {
-            let alert = NSAlert()
-            alert.messageText = "数据恢复未完成"
-            alert.informativeText = error.localizedDescription + "\n当前数据和恢复前副本已保留。"
-            alert.runModal()
-            exit(1)
-        }
-        do {
-                try HealthModuleRuntime.applyPendingRestoreBeforeOpening()
-                try FootprintsModuleRuntime.applyPendingRestoreBeforeOpening()
-        } catch {
-                let alert = NSAlert()
-                alert.messageText = "整合模块恢复未完成"
-                alert.informativeText = error.localizedDescription + "\n当前资料、来源归档及待恢复任务均已保留。"
-                alert.runModal()
-                exit(1)
-        }
         AppAppearance.current.apply()
     }
 
@@ -52,17 +35,7 @@ import RhythmFootprints
                 Button("显示搞节奏") { delegate.showMainWindow?() }
                     .keyboardShortcut("0", modifiers: .command)
             }
-            CommandMenu("数据") {
-                Button("导出模块备份…") { post("GaoSeries.rhythm.export") }
-                Button("恢复模块备份…") { post("GaoSeries.rhythm.import") }
-                Divider()
-                Button("健康资料导出…") { delegate.openIntegratedAction("health", "export") }
-                Button("健康资料恢复…") { delegate.openIntegratedAction("health", "import") }
-                Button("足迹资料导出…") { delegate.openIntegratedAction("footprints", "export") }
-                Button("足迹资料恢复…") { delegate.openIntegratedAction("footprints", "import") }
-                Divider()
-                Button("完整资料备份与恢复…") { delegate.showSettings?() }
-            }
+
         }
         // The binding keeps removing the item from implicitly terminating this app.
         MenuBarExtra(isInserted: $menuBarInserted) {

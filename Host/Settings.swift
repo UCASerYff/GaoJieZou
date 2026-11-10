@@ -25,51 +25,23 @@ enum AppDataLocations {
     static var groupContainer:URL? { FileManager.default.containerURL(forSecurityApplicationGroupIdentifier:"5G96498KGJ.com.gaojiezou.rhythm") }
 }
 struct DataSettings:View {
-    @State private var busy=false
     @State private var status=""
     var body:some View {
         Form {
-            Section("完整资料") {
-                Text("包含节奏、健康、足迹的业务历史、各自游戏进度、睡眠权威库、照片文档、整合来源归档及数据目录内的全部附件；密钥继续由系统钥匙串保管。")
-                Button("导出完整资料…",action:export).disabled(busy)
-                Button("从完整资料恢复…",action:restore).disabled(busy)
-                if busy { ProgressView() }
-                if !status.isEmpty { Text(status).textSelection(.enabled) }
-            }
-            Section("模块格式") {
-                Button("导出模块备份…") { post("GaoSeries.rhythm.export") }
-                Button("恢复模块备份…") { post("GaoSeries.rhythm.import") }
-            }
             Section("数据目录") {
-                Button("打开数据目录") { reveal(AppDataLocations.appSupport) }
-                Button("打开小组件共享目录") { reveal(AppDataLocations.groupContainer) }
+                Text("这里只打开现用资料位置，不会创建空白资料库。记录、设置、附件与游戏进度继续保存在原路径。")
+                Button("打开数据目录") { reveal(AppDataLocations.appSupport, name:"资料目录") }
+                Button("打开小组件共享目录") { reveal(AppDataLocations.groupContainer, name:"小组件共享目录") }
+                if !status.isEmpty { Text(status).foregroundStyle(.secondary).textSelection(.enabled) }
             }
         }.formStyle(.grouped)
     }
-    private func reveal(_ url:URL?) { if let url { do {try FileManager.default.createDirectory(at:url,withIntermediateDirectories:true);NSWorkspace.shared.open(url)} catch {status=error.localizedDescription} } }
-    private func export() {
-        
-        let panel=NSSavePanel();panel.allowedContentTypes=[.zip];panel.nameFieldStringValue="搞节奏-完整资料.zip"
-        guard panel.runModal() == .OK,let url=panel.url else {return}
-        busy=true;status="正在备份并逐文件校验…"
-        let support=AppDataLocations.appSupport,group=AppDataLocations.groupContainer
-        // Integrated sleep is already part of the complete group snapshot.
-        let sharedSleep: URL? = nil
-        Task { do {
-            let result=try await Task.detached {try AppBackupExport.export(appSupport:support,group:group,sharedSleep:sharedSleep,destination:url)}.value
-            busy=false;status="备份完成：\(result.fileCount) 个文件，全部 SHA-256 校验通过。"
-        } catch {busy=false;status="备份失败：\(error.localizedDescription)"} }
-    }
-    private func restore() {
-        let panel=NSOpenPanel();panel.allowedContentTypes=[.zip];panel.allowsMultipleSelection=false
-        guard panel.runModal() == .OK,let url=panel.url else {return}
-        busy=true;status="正在校验完整资料…"
-        Task { do {
-            let (staged,manifest)=try await Task.detached {try AppBackupRestore.prepare(url)}.value
-            busy=false
-            let alert=NSAlert();alert.messageText="恢复这份完整资料？";alert.informativeText="已核验 \(manifest.files.count) 个文件。应用将在下次启动时恢复，当前数据会保留为安全副本。整合备份包含健康、足迹和睡眠权威；旧独立格式须先离线核对，不能覆盖新权威。";alert.addButton(withTitle:"恢复并退出");alert.addButton(withTitle:"取消")
-            if alert.runModal() == .alertFirstButtonReturn { try AppBackupRestore.schedule(staged);NSApp.terminate(nil) }
-            else {try? FileManager.default.removeItem(at:staged);status="已取消"}
-        } catch {busy=false;status="恢复未完成：\(error.localizedDescription)"} }
+    private func reveal(_ url:URL?,name:String) {
+        guard let url,FileManager.default.fileExists(atPath:url.path) else {
+            status="\(name)尚未创建"
+            return
+        }
+        status=""
+        NSWorkspace.shared.open(url)
     }
 }
