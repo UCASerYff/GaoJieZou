@@ -169,8 +169,8 @@ final class RhythmSettings: ObservableObject {
 
     func canvasColor(for colorScheme: ColorScheme) -> Color {
         let base = colorScheme == .dark
-            ? NSColor(srgbRed: 0.075, green: 0.082, blue: 0.095, alpha: 1)
-            : NSColor(srgbRed: 0.975, green: 0.98, blue: 0.985, alpha: 1)
+            ? NSColor(srgbRed: 0.105, green: 0.115, blue: 0.105, alpha: 1)
+            : NSColor(srgbRed: 0.957, green: 0.941, blue: 0.910, alpha: 1)
         guard let selected = NSColor(rhythmHex: backgroundHex) else { return Color(nsColor: base) }
         return Color(nsColor: base.blended(withFraction: 0.28, of: selected) ?? base)
     }
@@ -196,13 +196,31 @@ private extension Color {
 }
 
 enum RhythmTheme {
-    static let blue = Color(red: 0.20, green: 0.45, blue: 0.82)
-    static let teal = Color(red: 0.16, green: 0.63, blue: 0.53)
-    static let green = Color(red: 0.24, green: 0.62, blue: 0.36)
-    static let orange = Color(red: 0.92, green: 0.53, blue: 0.20)
-    static let purple = Color(red: 0.48, green: 0.36, blue: 0.78)
+    static let morningGreen = Color(red: 0.212, green: 0.361, blue: 0.302)
+    static let morningClay = Color(red: 0.788, green: 0.463, blue: 0.341)
+    static let morningSage = Color(red: 0.863, green: 0.898, blue: 0.835)
+    static let blue = morningGreen
+    static let teal = Color(red: 0.33, green: 0.53, blue: 0.43)
+    static let green = Color(red: 0.35, green: 0.55, blue: 0.35)
+    static let orange = Color(red: 0.82, green: 0.51, blue: 0.27)
+    static let purple = Color(red: 0.48, green: 0.40, blue: 0.62)
     static let canvas = Color(nsColor: .windowBackgroundColor)
     static let panel = Color(nsColor: .controlBackgroundColor)
+    static let barBackground = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.125, green: 0.135, blue: 0.125, alpha: 1)
+            : NSColor(srgbRed: 0.980, green: 0.969, blue: 0.945, alpha: 1)
+    })
+    static let cardBorder = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 1, alpha: 0.09)
+            : NSColor(srgbRed: 0.75, green: 0.74, blue: 0.69, alpha: 0.48)
+    })
+    static let cardShadow = Color(nsColor: NSColor(name: nil) { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(white: 0, alpha: 0.22)
+            : NSColor(srgbRed: 0.16, green: 0.20, blue: 0.17, alpha: 0.07)
+    })
 
     struct ChoreColorOption: Identifiable {
         let id: String

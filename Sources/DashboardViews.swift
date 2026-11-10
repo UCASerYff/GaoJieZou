@@ -50,15 +50,13 @@ struct TodayDashboard: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 18) {
+                morningIntroduction
+                morningActionHero
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
                     StatTile(value: "\(completedHabits)/\(todayHabits.count)", label: "今日打卡", symbol: "checkmark.circle.fill", color: RhythmTheme.teal)
                     StatTile(value: RhythmFormatters.duration(store.focusSeconds(on: Date()), showSeconds: false), label: "今日专注", symbol: "timer", color: RhythmTheme.blue)
                     StatTile(value: store.lastNightSleepDuration(on: Date()).map { RhythmFormatters.duration($0, showSeconds: false) } ?? "—", label: "昨夜睡眠", symbol: "moon.stars.fill", color: RhythmTheme.purple)
                     StatTile(value: "\(store.coins)", label: "庄园金币", symbol: "circle.fill", color: RhythmTheme.orange)
-                }
-
-                if store.activeFocus != nil || store.activeSleep != nil {
-                    activeTimerCard
                 }
 
                 HStack(alignment: .top, spacing: 16) {
@@ -106,28 +104,66 @@ struct TodayDashboard: View {
         }
     }
 
-    private var activeTimerCard: some View {
-        HStack(spacing: 15) {
-            Image(systemName: store.activeFocus != nil ? "timer" : "moon.stars.fill")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 46, height: 46)
-                .background(store.activeFocus != nil ? RhythmTheme.blue : RhythmTheme.purple, in: RoundedRectangle(cornerRadius: 11))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(store.activeFocus.map { store.focusDisplayTitle(linkedActionID: $0.linkedActionID) } ?? RhythmLocalization.text("睡眠计时进行中"))
-                    .font(.headline)
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    Text(RhythmFormatters.duration(store.activeFocus != nil ? store.focusElapsed(at: context.date) : store.sleepElapsed(at: context.date)))
-                        .font(.title3.monospacedDigit().weight(.semibold))
-                }
+    private var morningIntroduction: some View {
+        HStack(alignment: .bottom) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(Date(), format: .dateTime.month(.wide).day().weekday(.wide))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Text(RhythmLocalization.text("把今天，过成自己的节奏。"))
+                    .font(.system(size: 30, weight: .semibold, design: .serif))
             }
             Spacer()
-            Button(RhythmLocalization.text("查看")) { selection = store.activeFocus != nil ? .focus : .sleep }
-                .buttonStyle(.borderedProminent)
         }
-        .padding(16)
-        .background((store.activeFocus != nil ? RhythmTheme.blue : RhythmTheme.purple).opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke((store.activeFocus != nil ? RhythmTheme.blue : RhythmTheme.purple).opacity(0.18)))
+        .padding(.top, 18)
+        .padding(.horizontal, 2)
+    }
+
+    private var morningActionHero: some View {
+        HStack(spacing: 22) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(store.activeFocus != nil ? RhythmLocalization.text("此刻专注") : store.activeSleep != nil ? RhythmLocalization.text("正在睡眠计时") : RhythmLocalization.text("今天的第一小步"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(RhythmTheme.morningGreen)
+                if store.activeFocus != nil || store.activeSleep != nil {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(RhythmFormatters.duration(store.activeFocus != nil ? store.focusElapsed(at: context.date) : store.sleepElapsed(at: context.date)))
+                            .font(.system(size: 42, weight: .semibold, design: .serif).monospacedDigit())
+                    }
+                    Text(store.activeFocus.map { store.focusDisplayTitle(linkedActionID: $0.linkedActionID) } ?? RhythmLocalization.text("安心休息，记录会在后台继续"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    Button(RhythmLocalization.text("查看计时")) { selection = store.activeFocus != nil ? .focus : .sleep }
+                        .buttonStyle(.borderedProminent)
+                        .tint(RhythmTheme.morningClay)
+                        .padding(.top, 6)
+                } else {
+                    Text(RhythmLocalization.text("从一件小事开始"))
+                        .font(.system(size: 28, weight: .semibold, design: .serif))
+                    Text(RhythmLocalization.text("一段专注、一次打卡，都是今天真实的痕迹。"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Button(RhythmLocalization.text("开始专注")) { selection = .focus }
+                            .buttonStyle(.borderedProminent)
+                            .tint(RhythmTheme.morningClay)
+                        Button(RhythmLocalization.text("今日打卡")) { selection = .habits }
+                            .buttonStyle(.bordered)
+                    }
+                    .padding(.top, 6)
+                }
+            }
+            Spacer(minLength: 20)
+            Image(systemName: store.activeSleep != nil ? "moon.stars.fill" : store.activeFocus != nil ? "timer" : "leaf.fill")
+                .font(.system(size: 38, weight: .light))
+                .foregroundStyle(RhythmTheme.morningGreen)
+                .frame(width: 104, height: 104)
+                .background(RhythmTheme.morningClay.opacity(0.16), in: Circle())
+                .padding(.trailing, 8)
+        }
+        .padding(24)
+        .background(RhythmTheme.morningSage, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(RhythmTheme.morningGreen.opacity(0.10)))
     }
 
     private var todayHabitCard: some View {
