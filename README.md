@@ -126,3 +126,7 @@ V4.12 不提供或生成完整资料备份、模块备份和每日自动快照�
 健康与足迹的功能直接放在主侧栏，荒岛生活、旅行列车与原奖励游戏同级；内容区不再嵌入第二份应用侧栏。各游戏仍使用原存档和独立货币，详见 [统一主导航说明](docs/V4.10-single-navigation.md)。
 
 迁移工具分为计划、准备、严格核验和激活；资料未激活时模块不会创建空白库替代原资料。Darwin 元数据复制使用显式、按计划绑定的精确政策，三份私有 SQL 临时库保留原 quarantine 字节。公开源码和发行附件不包含本机迁移计划、收据、原始元数据、个人资料或恢复副本。
+
+## Windows 版
+
+Windows 10/11 x64 的独立版本在 [`windows/`](windows/README.md)。它使用 Python 标准库和本机浏览器界面，节奏资料仍是 schema 11 的 `library.json`，健康、足迹和共享睡眠沿用各自的 SQLite。构建由 GitHub Actions 的 `windows-latest` 完成。功能对齐、运行方式和已知差异见 [windows/README.md](windows/README.md)。Windows 版使用 `%APPDATA%\GaoSeries\Rhythm\`，不读取 macOS 的 App Group，也不修改 Mac 版源码、签名或版本号。
