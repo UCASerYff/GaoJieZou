@@ -7,6 +7,7 @@ import json
 import math
 import os
 import random
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,7 +16,7 @@ from gaojiezou import catalog, library
 from gaojiezou.errors import AppError
 from gaojiezou.footprints import FootprintStore
 from gaojiezou.health import HealthStore
-from gaojiezou.sleepstore import SharedSleep
+from gaojiezou.sleepstore import SharedSleep, merge_credits
 from gaojiezou.timeutil import add_days, cocoa, day_key, from_cocoa, in_zone, start_of_day, swift_weekday
 from gaojiezou.version import MARKETING_VERSION, VERSION_LABEL, WINDOWS_BUILD
 
@@ -40,9 +41,16 @@ class RhythmStore:
             "appearance": "system",
             "language": "zh-Hans",
             "habitReminderHour": 21,
+            "habitReminderMinute": 0,
             "habitReminderEnabled": False,
+            "backgroundHex": "",
         }
-        self.sleep = SharedSleep(self.directory / "Integration" / "SharedSleep")
+        self.settings_source = {}
+        self.settings_protected = False
+        self.sleep = SharedSleep(self.directory / "Integration" / "SharedSleep", self.now)
+        self.sleep_sync_error = ""
+        self._sleep_authority_token = None
+        self.shared_sleep_records: list[dict] = []
         self.health = HealthStore(self.directory / "Integration" / "Modules" / "Health", self.tz)
         self.footprints = FootprintStore(self.directory / "Integration" / "Modules" / "Footprints")
         self.cast: dict | None = None
@@ -267,7 +275,7 @@ class RhythmStore:
         if self.library.get("activeFocus") or self.library.get("activeSleep"):
             raise AppError("同一时间只能运行一个专注或睡眠计时。", "busy")
         moment = self.now()
-        target = max(1.0, float(target_hours if target_hours is not None else self.settings["sleepTargetHours"]))
+        target = self._sleep_target(target_hours)
         sleep = {
             "id": _uuid(),
             "startedAt": cocoa(moment),
@@ -283,12 +291,15 @@ class RhythmStore:
     def finish_sleep(self) -> dict:
         self._ready()
         moment = self.now()
-        self.synchronize(moment)
+        self.synchronize_sleep_records(moment)
         sleep = self.library.get("activeSleep")
         if not sleep:
             raise AppError("没有进行中的睡眠。", "invalid")
+        if cocoa(moment) < sleep["startedAt"]:
+            raise AppError("结束时间不能早于睡眠开始时间。", "invalid")
         before = json.loads(json.dumps(self.library))
-        duration = max(0, moment.timestamp() - from_cocoa(sleep["startedAt"]).timestamp())
+        self.synchronize(moment)
+        duration = cocoa(moment) - sleep["startedAt"]
         target = max(1.0, float(sleep.get("targetHours") or 8))
         hours = duration / 3600
         score = max(0, min(100, int(100 - abs(hours - target) * 18)))
@@ -299,24 +310,13 @@ class RhythmStore:
             "durationSeconds": duration,
             "score": score,
             "pastureYield": int(sleep.get("pastureYieldCredited") or 0),
-            "manualEntry": False,
-            "manualGrowthCreditedSeconds": min(duration, catalog.SLEEP_GROWTH_CAP_SECONDS),
-            "manualProductionCreditedCycles": catalog.SLEEP_PRODUCTION_CYCLE_CAP,
             "origin": "rhythm",
         }
         self.library["sleepRecords"].insert(0, record)
         self.library["sleepRecords"].sort(key=lambda row: float(row["endedAt"]), reverse=True)
         self.library["activeSleep"] = None
         self._reward("结束睡眠计时", f"评分 {score}。", 0, "moon.stars.fill")
-        try:
-            self._publish_sleep(record)
-        except AppError as exc:
-            if exc.code == "duplicate":
-                self.library = before
-                self.save()
-                raise
-        self.save()
-        self._reward_island_sleep([record])
+        self._save_completed_sleep(record, before, moment)
         return record
 
     def cancel_sleep(self) -> None:
@@ -327,53 +327,82 @@ class RhythmStore:
 
     def add_manual_sleep(self, start: datetime, end: datetime, target_hours: float | None = None) -> dict:
         self._ready()
-        start = start.astimezone(self.tz)
-        end = end.astimezone(self.tz)
-        if end <= start or end > self.now():
-            raise AppError("起床时间必须晚于就寝，且不能晚于现在。", "invalid")
-        duration = (end - start).total_seconds()
-        if not 0.5 * 3600 <= duration <= 24 * 3600:
-            raise AppError("睡眠时长须在 0.5 到 24 小时之间。", "invalid")
+        moment = self.now()
+        target = self._sleep_target(target_hours)
+        record = self._manual_sleep_record(start, end, target, moment, "rhythm")
+        self.synchronize_sleep_records(moment)
         for row in self.library["sleepRecords"]:
-            if abs(from_cocoa(row["startedAt"]).timestamp() - start.timestamp()) < 60 and abs(from_cocoa(row["endedAt"]).timestamp() - end.timestamp()) < 60:
+            if abs(row["startedAt"] - record["startedAt"]) <= 60 and abs(row["endedAt"] - record["endedAt"]) <= 60:
                 raise AppError("已有起止时间相近的睡眠记录。", "duplicate")
         before = json.loads(json.dumps(self.library))
-        target = max(1.0, float(target_hours if target_hours is not None else self.settings["sleepTargetHours"]))
-        score = max(0, min(100, int(100 - abs(duration / 3600 - target) * 18)))
-        record = {
+        self.library["sleepRecords"].append(record)
+        self.library["sleepRecords"].sort(key=lambda row: (-row["endedAt"], row["id"]))
+        self._settle_manual(record["id"], target)
+        self._reward("手动录入睡眠记录", f"牧场产物 {record['pastureYield']}。", 0, "moon.stars.fill")
+        self._save_completed_sleep(record, before, moment)
+        return record
+
+    def add_health_sleep(self, start: datetime, end: datetime) -> dict:
+        self._ready()
+        moment = self.now()
+        record = self._manual_sleep_record(start, end, 8, moment, "health")
+        self._require_sleep_authority()
+        self.sleep.upsert(record)
+        self.synchronize_sleep_records(moment)
+        return next((row for row in self.shared_sleep_records if row["id"] == record["id"]), record)
+
+    def _manual_sleep_record(self, start: datetime, end: datetime, target: float, moment: datetime, origin: str) -> dict:
+        started_at, ended_at = cocoa(start), cocoa(end)
+        if ended_at <= started_at or ended_at > cocoa(moment):
+            raise AppError("起床时间必须晚于就寝，且不能晚于现在。", "invalid")
+        duration = ended_at - started_at
+        if not 1800 <= duration <= 86400:
+            raise AppError("睡眠时长须在 0.5 到 24 小时之间。", "invalid")
+        return {
             "id": _uuid(),
-            "startedAt": cocoa(start),
-            "endedAt": cocoa(end),
+            "startedAt": started_at,
+            "endedAt": ended_at,
             "durationSeconds": duration,
-            "score": score,
+            "score": max(0, min(100, int(100 - abs(duration / 3600 - target) * 18))),
             "pastureYield": 0,
             "manualEntry": True,
             "manualGrowthCreditedSeconds": 0,
             "manualProductionCreditedCycles": 0,
-            "origin": "rhythm",
+            "origin": origin,
         }
-        self.library["sleepRecords"].append(record)
-        self.library["sleepRecords"].sort(key=lambda row: float(row["endedAt"]), reverse=True)
-        self._settle_manual(record["id"], target)
-        saved = next(row for row in self.library["sleepRecords"] if row["id"] == record["id"])
-        self._reward("手动录入睡眠记录", f"牧场产物 {saved['pastureYield']}。", 0, "moon.stars.fill")
+
+    def _sleep_target(self, target_hours: float | None) -> float:
         try:
-            self._publish_sleep(saved)
+            target = float(self.settings["sleepTargetHours"] if target_hours is None else target_hours)
+            if math.isfinite(target) and target > 0:
+                return max(1, target)
+        except (TypeError, ValueError, OverflowError):
+            pass
+        raise AppError("睡眠目标必须为正数。", "invalid")
+
+    def _save_completed_sleep(self, record: dict, before: dict, moment: datetime) -> None:
+        try:
+            self.save()
+        except (AppError, OSError):
+            self.library = before
+            raise
+        try:
+            self._require_sleep_authority()
+            self.sleep.upsert(record)
         except AppError as exc:
             if exc.code == "duplicate":
                 self.library = before
                 self.save()
                 raise
-        self.save()
-        self._reward_island_sleep([saved])
-        return saved
+            self.sleep_sync_error = f"睡眠已在本机保存，共同睡眠同步将重试。{exc.message}"
+            return
+        self.synchronize_sleep_records(moment)
 
     def delete_sleep(self, record_id: str) -> None:
         self._ready()
-        self.library["sleepRecords"] = [row for row in self.library["sleepRecords"] if row["id"] != record_id]
-        if self.sleep.available and self.sleep._db is not None and self.sleep.migration_present():
-            self.sleep.remove(record_id)
-        self.save()
+        self._require_sleep_authority()
+        self.sleep.remove(record_id)
+        self.synchronize_sleep_records()
 
     # —— 琐事与目标 ——
 
@@ -420,6 +449,12 @@ class RhythmStore:
             self._reward("完成琐事", f"获得 {catalog.CHORE_COINS} 金币。", catalog.CHORE_COINS, "checklist")
         self.save()
         return chore
+
+    def delete_chore(self, chore_id: str) -> None:
+        self._ready()
+        self._chore(chore_id)
+        self.library["chores"] = [row for row in self.library["chores"] if row["id"] != chore_id]
+        self.save()
 
     def save_goal(self, payload: dict) -> dict:
         self._ready()
@@ -469,12 +504,24 @@ class RhythmStore:
         self.save()
         return goal
 
+    def delete_goal(self, goal_id: str) -> None:
+        self._ready()
+        self._goal(goal_id)
+        self.library["longGoals"] = [row for row in self.library["longGoals"] if row["id"] != goal_id]
+        for action in self.library["shortActions"]:
+            if action.get("goalID") == goal_id:
+                action.pop("goalID", None)
+        self.save()
+
     def save_action(self, payload: dict) -> dict:
         self._ready()
         title = str(payload.get("title") or "").strip()
         minutes = int(payload.get("estimatedMinutes") or 0)
         if not title or minutes < 1:
             raise AppError("行动需要标题，预计分钟至少为 1。", "invalid")
+        if "startDate" in payload:
+            start = _as_cocoa(payload["startDate"], self.now(), self.tz) if payload["startDate"] else None
+            end = _as_cocoa(payload["endDate"], self.now(), self.tz) if start is not None and payload.get("endDate") else start
         existing = payload.get("id")
         if existing:
             action = self._action(existing)
@@ -500,6 +547,11 @@ class RhythmStore:
             if payload.get("goalID"):
                 action["goalID"] = payload["goalID"]
             self.library["shortActions"].append(action)
+        if "startDate" in payload:
+            action["startDate"] = start
+            action["endDate"] = max(start, end) if start is not None else None
+            if not existing:
+                action["dueDate"] = action["endDate"] if start is not None else cocoa(self.now())
         if payload.get("isCompleted") and not action.get("isCompleted"):
             self._complete_action(action, True)
         elif payload.get("isCompleted") is False:
@@ -507,6 +559,13 @@ class RhythmStore:
             action["completedAt"] = None
         self.save()
         return action
+
+    def delete_action(self, action_id: str) -> None:
+        self._ready()
+        if self._action(action_id) is None:
+            raise AppError("行动不存在。", "invalid")
+        self.library["shortActions"] = [row for row in self.library["shortActions"] if row["id"] != action_id]
+        self.save()
 
     def toggle_action(self, action_id: str) -> dict:
         self._ready()
@@ -527,11 +586,13 @@ class RhythmStore:
             raise AppError("这块田不能播种。", "unavailable")
         if self.library["coins"] < spec[4]:
             raise AppError("金币不足。", "funds")
+        moment = self.now()
+        self.synchronize(moment)
         self.library["coins"] -= spec[4]
         plot["cropID"] = spec[0]
         plot["growthMinutes"] = 0
         plot["nextFocusBoost"] = 0
-        plot["plantedAt"] = cocoa(self.now())
+        plot["plantedAt"] = cocoa(moment)
         self.save()
         return plot
 
@@ -556,18 +617,33 @@ class RhythmStore:
 
     def harvest(self, plot_id: str) -> int:
         self._ready()
-        plot = self._plot(plot_id)
+        self.synchronize()
+        earned = self._harvest_plot(self._plot(plot_id))
+        if not earned:
+            raise AppError("作物还没成熟。", "unavailable")
+        self.save()
+        return earned
+
+    def harvest_all(self) -> tuple[int, int]:
+        self._ready()
+        self.synchronize()
+        earnings = [self._harvest_plot(plot) for plot in self.library["farmPlots"]]
+        coins = sum(earnings)
+        if coins:
+            self.save()
+        return sum(earned > 0 for earned in earnings), coins
+
+    def _harvest_plot(self, plot: dict) -> int:
         spec = catalog.crop(plot.get("cropID"))
         if spec is None or float(plot.get("growthMinutes") or 0) < spec[3]:
-            raise AppError("作物还没成熟。", "unavailable")
+            return 0
         self.library["coins"] += spec[5]
         self.library["harvestedCrops"][spec[0]] = int(self.library["harvestedCrops"].get(spec[0]) or 0) + 1
-        plot.clear()
-        plot["id"] = plot_id
+        plot.pop("cropID", None)
+        plot.pop("plantedAt", None)
         plot["growthMinutes"] = 0
         plot["nextFocusBoost"] = 0
         self._reward(f"收获并出售{spec[1]}", f"获得 {spec[5]} 金币。", spec[5], "leaf.fill")
-        self.save()
         return spec[5]
 
     def buy_shelter(self) -> int:
@@ -592,13 +668,15 @@ class RhythmStore:
             raise AppError("没有空余窝位。", "capacity")
         if self.library["coins"] < spec[4]:
             raise AppError("金币不足。", "funds")
+        moment = self.now()
+        self.synchronize(moment)
         self.library["coins"] -= spec[4]
         resident = {
             "id": _uuid(),
             "animalID": spec[0],
             "growthHours": 0,
             "pendingProducts": 0,
-            "acquiredAt": cocoa(self.now()),
+            "acquiredAt": cocoa(moment),
         }
         self.library["pastureAnimals"].append(resident)
         self.save()
@@ -606,6 +684,7 @@ class RhythmStore:
 
     def collect_products(self, resident_id: str | None = None) -> int:
         self._ready()
+        self.synchronize()
         total = 0
         for resident in self.library["pastureAnimals"]:
             if resident_id and resident["id"] != resident_id:
@@ -623,6 +702,7 @@ class RhythmStore:
 
     def sell_animal(self, resident_id: str) -> int:
         self._ready()
+        self.synchronize()
         resident = next((row for row in self.library["pastureAnimals"] if row["id"] == resident_id), None)
         spec = catalog.animal(resident.get("animalID")) if resident else None
         if resident is None or spec is None:
@@ -645,6 +725,19 @@ class RhythmStore:
         bite = moment + timedelta(seconds=0.8 + max(1, wait))
         self.cast = {"castAt": cocoa(moment), "biteAt": cocoa(bite), "resolved": False}
         return {"biteAt": self.cast["biteAt"]}
+
+    def move_pasture_animal(self, resident_id: str, index: int) -> None:
+        self._ready()
+        animals = self.library["pastureAnimals"]
+        animal = next((row for row in animals if row["id"] == resident_id), None)
+        if animal is None:
+            raise AppError("动物不存在。", "invalid")
+        animals.remove(animal)
+        animals.insert(max(0, min(index, len(animals))), animal)
+        self.save()
+
+    def cancel_cast(self) -> None:
+        self.cast = None
 
     def reel(self, roll: int | None = None) -> dict:
         self._ready()
@@ -723,6 +816,34 @@ class RhythmStore:
         self.save()
         return True
 
+    def sell_one_fish(self, fish_id: str) -> int:
+        self._ready()
+        spec = catalog.fish(fish_id)
+        inventory = self.library["fishInventory"]
+        count = int(inventory.get(fish_id) or 0)
+        if spec is None or count < 1:
+            raise AppError("鱼篓中没有这种鱼。", "unavailable")
+        if count == 1:
+            inventory.pop(fish_id)
+        else:
+            inventory[fish_id] = count - 1
+        self.library["coins"] += spec[3]
+        self._reward(f"出售{spec[1]}", f"获得 {spec[3]} 金币。", spec[3], "fish.fill")
+        self.save()
+        return spec[3]
+
+    def return_aquarium_fish(self, resident_id: str) -> None:
+        self._ready()
+        residents = self.library["aquariumFish"]
+        resident = next((row for row in residents if row["id"] == resident_id), None)
+        if resident is None:
+            raise AppError("水族馆中没有这条鱼。", "unavailable")
+        residents.remove(resident)
+        fish_id = resident["fishID"]
+        inventory = self.library["fishInventory"]
+        inventory[fish_id] = int(inventory.get(fish_id) or 0) + 1
+        self.save()
+
     def collect_aquarium(self, at: datetime | None = None) -> int:
         self._ready()
         moment = at.astimezone(self.tz) if at else self.now()
@@ -776,6 +897,8 @@ class RhythmStore:
         return price
 
     def update_settings(self, payload: dict) -> dict:
+        if self.settings_protected:
+            raise AppError("已有设置文件无法读取，未覆盖。", "protected")
         if "sleepTargetHours" in payload:
             self.settings["sleepTargetHours"] = min(12, max(5, float(payload["sleepTargetHours"])))
         if payload.get("appearance") in {"system", "light", "dark"}:
@@ -784,8 +907,12 @@ class RhythmStore:
             self.settings["language"] = payload["language"]
         if "habitReminderHour" in payload:
             self.settings["habitReminderHour"] = min(23, max(0, int(payload["habitReminderHour"])))
+        if "habitReminderMinute" in payload:
+            self.settings["habitReminderMinute"] = min(59, max(0, int(payload["habitReminderMinute"])))
         if "habitReminderEnabled" in payload:
             self.settings["habitReminderEnabled"] = bool(payload["habitReminderEnabled"])
+        if isinstance(payload.get("backgroundHex"), str) and re.fullmatch(r"(?:#[0-9a-fA-F]{6})?", payload["backgroundHex"]):
+            self.settings["backgroundHex"] = payload["backgroundHex"]
         if self.status == "ready":
             self._write_settings()
         return self.settings
@@ -808,13 +935,29 @@ class RhythmStore:
 
     def snapshot(self) -> dict:
         moment = self.now()
+        if self.status == "ready":
+            self.synchronize_sleep_records(moment)
         health = None
         footprints = None
         if self.health.state is not None:
             health = self.health.summary(moment)
             health["trends"] = __import__("gaojiezou.health", fromlist=["trends"]).trends(self.health.state, moment, self.tz, 7)
+            health["sleepRecords"] = self.shared_sleep_records
+            health["sleepSyncError"] = self.sleep_sync_error
         if self.footprints.journal is not None:
             footprints = self.footprints.summary()
+        current, longest = self.habit_streaks() if self.library else (0, 0)
+        estate = {}
+        if self.library:
+            estate = {
+                "nextPlotCost": catalog.farm_plot_cost(len(self.library["farmPlots"])),
+                "nextShelterCost": catalog.animal_shelter_cost(self.library["animalShelterCapacity"]),
+                "aquariumIncome": sum(
+                    _aquarium_days(resident, moment, self.tz) * catalog.daily_income(spec[4])
+                    for resident in self.library["aquariumFish"]
+                    if (spec := catalog.fish(resident.get("fishID")))
+                ),
+            }
         return {
             "version": VERSION_LABEL,
             "marketingVersion": MARKETING_VERSION,
@@ -822,19 +965,32 @@ class RhythmStore:
             "schema": catalog.SCHEMA_VERSION,
             "status": self.status,
             "notice": self.notice,
+            "sleepSyncError": self.sleep_sync_error,
             "settings": self.settings,
             "counts": self.counts(),
             "library": self.library,
             "elapsedFocus": self.focus_elapsed(moment) if self.library else 0,
+            "clock": cocoa(moment),
+            "cast": self.cast if self.cast and not self.cast.get("resolved") else None,
+            "habitStreaks": {"current": current, "longest": longest},
+            "estate": estate,
             "health": health,
             "footprints": footprints,
             "catalog": {
                 "crops": [{"id": row[0], "name": row[1], "emoji": row[2], "minutes": row[3], "seed": row[4], "sell": row[5]} for row in catalog.CROPS],
-                "animals": [{"id": row[0], "name": row[1], "emoji": row[2], "product": row[3], "buy": row[4], "value": row[5]} for row in catalog.ANIMALS],
+                "animals": [{"id": row[0], "name": row[1], "emoji": row[2], "product": row[3], "buy": row[4], "value": row[5],
+                             "maturity": catalog.maturity_hours(row[6])} for row in catalog.ANIMALS],
                 "fish": [{"id": row[0], "name": row[1], "emoji": row[2], "sell": row[3], "rarity": row[4]} for row in catalog.FISH],
                 "decorations": [{"id": row[0], "name": row[1], "price": catalog.decoration_price(row[2], 0)} for row in catalog.DECORATIONS],
-                "islandActions": [{"id": row[0], "name": row[1]} for row in catalog.ISLAND_ACTIONS],
-                "islandRecipes": [{"id": row[0], "name": row[1], "tool": row[4]} for row in catalog.ISLAND_RECIPES],
+                "islandActions": [
+                    {"id": row[0], "name": row[1], "energy": row[2], "food": row[3], "water": row[4],
+                     "output": row[5], "yield": health["island"]["actionYields"].get(row[0], row[6]) if health else row[6]}
+                    for row in catalog.ISLAND_ACTIONS
+                ],
+                "islandRecipes": [
+                    {"id": row[0], "name": row[1], "cost": row[2], "tool": row[4]}
+                    for row in catalog.ISLAND_RECIPES
+                ],
             },
         }
 
@@ -843,9 +999,12 @@ class RhythmStore:
         if settings_path.exists():
             try:
                 stored = json.loads(settings_path.read_text(encoding="utf-8"))
-                if isinstance(stored, dict):
-                    self.settings.update({key: stored[key] for key in self.settings if key in stored})
-            except (OSError, json.JSONDecodeError):
+                if not isinstance(stored, dict):
+                    raise ValueError("settings must be an object")
+                self.settings_source = stored
+                self.settings.update({key: stored[key] for key in self.settings if key in stored})
+            except (OSError, ValueError):
+                self.settings_protected = True
                 self.notice = "settings.json 无法读取，继续使用默认设置，未覆盖该文件。"
         status, document, notice = library.load_document(self.directory)
         self.status = status
@@ -864,15 +1023,35 @@ class RhythmStore:
             self.notice = (self.notice + " " if self.notice else "") + "未找到 Integration/authority.json，健康、足迹和共享睡眠未新建。"
             return
         try:
-            if self.sleep.available:
-                self.sleep.open_existing()
-            if self.health.available:
-                self.health.open_existing()
-            if self.footprints.available:
-                self.footprints.open_existing()
-                self.footprints.prepare_station()
+            self._require_sleep_authority()
         except AppError as exc:
-            self.notice = (self.notice + " " if self.notice else "") + exc.message
+            self.sleep_sync_error = exc.message
+        for module in (self.health, self.footprints):
+            if module.available:
+                try:
+                    module.open_existing()
+                    if module is self.footprints:
+                        self.footprints.prepare_station()
+                except AppError as exc:
+                    self.notice = (self.notice + " " if self.notice else "") + exc.message
+
+    def _validate_sleep_authority(self) -> None:
+        authority = self.directory / "Integration" / "authority.json"
+        try:
+            data = json.loads(authority.read_bytes())
+            if not isinstance(data, dict) or any(data.get(key) != value for key, value in AUTHORITY.items()):
+                raise ValueError("authority")
+            token = (True, data.get("transactionID"))
+            if self._sleep_authority_token is not None and token != self._sleep_authority_token:
+                raise ValueError("authority changed")
+            self._sleep_authority_token = token
+        except (OSError, ValueError) as exc:
+            raise AppError("共享睡眠权威配置缺失或无效，原资料已保留。", "protected") from exc
+
+    def _require_sleep_authority(self) -> None:
+        self._validate_sleep_authority()
+        if not self.sleep.is_open:
+            self.sleep.open_existing()
 
     def _write_authority_and_modules(self, now) -> None:
         root = self.directory / "Integration"
@@ -884,7 +1063,8 @@ class RhythmStore:
         self.footprints.prepare_station()
 
     def _write_settings(self) -> None:
-        library.atomic_write(self.directory / "settings.json", library.dumps(self.settings))
+        if not self.settings_protected:
+            library.atomic_write(self.directory / "settings.json", library.dumps({**self.settings_source, **self.settings}))
 
     def _write_widget_snapshot(self) -> None:
         raw = (self.directory / library.LIBRARY_NAME).read_bytes()
@@ -942,6 +1122,7 @@ class RhythmStore:
             raise AppError("田里没有作物。", "unavailable")
         if self.library["coins"] < cost:
             raise AppError("金币不足。", "funds")
+        self.synchronize()
         self.library["coins"] -= cost
         plot["nextFocusBoost"] = min(catalog.MAXIMUM_FOCUS_BOOST, float(plot.get("nextFocusBoost") or 0) + boost)
         self.save()
@@ -1006,28 +1187,78 @@ class RhythmStore:
 
     def _settle_manual(self, record_id: str, target_hours: float) -> None:
         record = next(row for row in self.library["sleepRecords"] if row["id"] == record_id)
-        self._settle_sleep_progress(record, float(record["durationSeconds"]), target_hours, manual=True)
+        self._settle_sleep_progress(record, record["durationSeconds"], target_hours, manual=True)
 
-    def _publish_sleep(self, record: dict) -> None:
-        if not self.sleep.available or self.sleep._db is None:
+    def synchronize_sleep_records(self, moment: datetime | None = None) -> None:
+        if self.status != "ready" or self.library is None:
             return
-        self.sleep.upsert(record)
-
-    def _reward_island_sleep(self, records: list[dict]) -> None:
-        if self.health.state is None:
-            return
-        self.health.reward_sleep(records, self.now())
+        moment = moment or self.now()
+        try:
+            self._require_sleep_authority()
+            previous = self.library["sleepRecords"]
+            local = {row["id"]: row for row in previous}
+            entries = self.sleep.entries()
+            known = {entry["id"] for entry in entries}
+            for record_id, record in local.items():
+                if record_id in known:
+                    continue
+                origin = record.get("origin") or ("health" if record.get("healthSource") else "rhythm")
+                pending = {**record, "origin": origin}
+                settlement = dict(pending)
+                if origin == "rhythm" and not pending.get("manualEntry"):
+                    settlement["manualGrowthCreditedSeconds"] = max(
+                        settlement.get("manualGrowthCreditedSeconds") or 0,
+                        min(record["durationSeconds"], catalog.SLEEP_GROWTH_CAP_SECONDS),
+                    )
+                    settlement["manualProductionCreditedCycles"] = max(
+                        settlement.get("manualProductionCreditedCycles") or 0, catalog.SLEEP_PRODUCTION_CYCLE_CAP,
+                    )
+                self.sleep.reconcile_pending(pending, settlement)
+            canonical = self.sleep.live()
+            self.shared_sleep_records = canonical
+            incoming = [merge_credits(local.get(row["id"], {}), row) for row in canonical]
+            for row in incoming:
+                if row.get("origin") == "health" and not row.get("healthSource"):
+                    row["healthSource"] = "搞健康"
+            if incoming != previous:
+                before = json.loads(json.dumps(self.library))
+                try:
+                    self.library["sleepRecords"] = incoming
+                    for row in incoming:
+                        if row.get("origin") == "health" and row["id"] not in local:
+                            self._settle_manual(row["id"], self._sleep_target(None))
+                    self.save()
+                except (AppError, OSError):
+                    self.library = before
+                    raise
+            updated = False
+            for entry, record in zip(canonical, incoming):
+                if merge_credits(record, entry) != entry:
+                    self.sleep.update_settlement(record)
+                    updated = True
+            if updated:
+                canonical = self.sleep.live()
+                self.shared_sleep_records = canonical
+            if self.health.state is not None:
+                self.health.reward_sleep(canonical, moment)
+            self.sleep_sync_error = ""
+        except (AppError, OSError) as exc:
+            self.sleep_sync_error = f"共同睡眠暂不可用，本地记录已保留。{exc}"
 
     def habit_streaks(self) -> tuple[int, int]:
         if not self.library or not self.library["habits"]:
             return 0, 0
-        earliest = min(start_of_day(from_cocoa(habit["createdAt"]), self.tz) for habit in self.library["habits"])
         today = start_of_day(self.now(), self.tz)
+        earliest = min(
+            start_of_day(from_cocoa(habit["createdAt"]), self.tz)
+            for habit in self.library["habits"] if habit.get("createdAt") is not None
+        ) if all(habit.get("createdAt") is not None for habit in self.library["habits"]) else today
+        completions = set(self.library["habitCompletionKeys"])
         days = []
         cursor = earliest
         while cursor <= today:
             scheduled = [habit for habit in self.library["habits"] if _scheduled(habit, cursor, self.tz)]
-            done = sum(1 for habit in scheduled if _habit_key(habit["id"], cursor, self.tz) in self.library["habitCompletionKeys"])
+            done = sum(1 for habit in scheduled if _habit_key(habit["id"], cursor, self.tz) in completions)
             days.append((cursor, len(scheduled), done))
             cursor = cursor + timedelta(days=1)
         longest = run = 0

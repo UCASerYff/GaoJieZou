@@ -1,287 +1,470 @@
-const token = document.querySelector('meta[name="gao-token"]').content;
-const app = document.querySelector("#app");
-const workspaces = document.querySelector("#workspaces");
-let state = null;
-let page = "today";
-let sub = "focus";
-
-const pages = [
-  ["today", "今天"],
-  ["rhythm", "节奏"],
-  ["health", "健康"],
-  ["footprints", "足迹"],
-  ["play", "乐园"],
-];
-
-async function api(path, body) {
-  const response = await fetch(path, {
-    method: body ? "POST" : "GET",
-    headers: { "X-Gao-Token": token, "Content-Type": "application/json" },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json();
-  if (!response.ok || data.ok === false) throw new Error(data.error || "请求失败");
-  if (data.state) state = data.state;
-  return data.result ?? data;
-}
-
-function cocoa(value) {
-  return new Date((Number(value) + 978307200) * 1000);
-}
-function stamp(value) {
-  if (value == null) return "";
-  return cocoa(value).toLocaleString();
-}
-function hours(seconds) {
-  return (Number(seconds) / 3600).toFixed(2);
-}
-
-function renderNav() {
-  workspaces.innerHTML = pages.map(([id, name]) =>
-    `<button type="button" data-page="${id}" class="${page === id ? "active" : ""}">${name}</button>`
-  ).join("");
-  workspaces.querySelectorAll("button").forEach((button) => {
-    button.onclick = () => { page = button.dataset.page; render(); };
-  });
-  const theme = state && state.settings ? state.settings.appearance : "system";
-  document.body.dataset.theme = theme === "system" ? "" : theme;
-}
-
-async function refresh() {
-  const response = await fetch("/api/state", { headers: { "X-Gao-Token": token } });
-  state = await response.json();
-  render();
-}
-
-function render() {
-  renderNav();
-  if (!state || state.status === "missing") {
-    app.innerHTML = `<section class="card"><h1>创建我的资料库</h1><p>目录是空的。确认后才会写入 schema 11 的 library.json，以及本机的健康、足迹和共享睡眠库。</p><button class="primary" id="create">创建我的资料库</button></section>`;
-    document.querySelector("#create").onclick = () => api("/api/library/create", {}).then(render).catch(showError);
-    return;
-  }
-  if (state.status !== "ready") {
-    app.innerHTML = `<section class="card notice"><h1>资料已保护</h1><p>${escapeHtml(state.notice || "未写入。")}</p><p class="muted">原文件保留。这里没有备份、恢复或用空库覆盖的操作。</p></section>`;
-    return;
-  }
-  const views = { today: renderToday, rhythm: renderRhythm, health: renderHealth, footprints: renderFootprints, play: renderPlay };
-  app.innerHTML = views[page]();
-  bind();
-}
-
-function renderToday() {
-  const lib = state.library;
-  const focus = lib.activeFocus;
-  const sleep = lib.activeSleep;
-  const health = state.health || {};
-  return `<section class="grid">
-    <article class="card"><h2>专注</h2><p>${focus ? (focus.segmentStartedAt ? "计时中" : "已暂停") : "未开始"} · ${Math.round(state.elapsedFocus / 60)} 分钟</p><button data-action="/api/focus/start">开始</button></article>
-    <article class="card"><h2>睡眠</h2><p>${sleep ? "计时中" : "未开始"}</p><button data-action="/api/sleep/start">开始睡眠</button></article>
-    <article class="card"><h2>庄园</h2><p>${lib.coins} 金币 · ${lib.bait} 鱼饵</p></article>
-    <article class="card"><h2>健康今日</h2><p>${health.available ? `饮水 ${Math.round(health.water || 0)} / ${health.waterGoal ?? "未设目标"} mL` : "健康库未打开"}</p></article>
-  </section>
-  <section class="card"><h2>今日打卡</h2>${habitList(new Date())}<p class="muted">${state.settings.habitReminderEnabled ? `提醒时间记为 ${state.settings.habitReminderHour}:00。Windows 不弹系统通知。` : "系统通知未启用。"}</p></section>
-  ${state.notice ? `<p class="notice">${escapeHtml(state.notice)}</p>` : ""}`;
-}
-
-function renderRhythm() {
-  const tabs = [["focus", "专注"], ["sleep", "睡眠"], ["habits", "习惯"], ["chores", "琐事"], ["goals", "目标"], ["stats", "统计"]];
-  return `<div class="row">${tabs.map(([id, name]) => `<button data-sub="${id}" class="${sub === id ? "active" : ""}">${name}</button>`).join("")}</div>${rhythmBody()}`;
-}
-
-function rhythmBody() {
-  const lib = state.library;
-  if (sub === "focus") {
-    return `<section class="card"><h2>专注</h2><p>已进行 ${Math.round(state.elapsedFocus)} 秒。关闭浏览器不会停止本进程里的计时；点「退出」才会暂停并保存。Windows 收不到锁屏事件，需要时用「系统暂停」。</p>
-      <div class="row"><button data-action="/api/focus/start">开始</button><button data-action="/api/focus/pause">暂停</button><button data-post="/api/focus/pause" data-body='{"system":true}'>系统暂停</button><button data-action="/api/focus/resume">继续</button><button data-action="/api/focus/finish">完成</button><button data-action="/api/focus/cancel">取消</button></div>
-      <ul>${(lib.focusRecords || []).slice(0, 8).map((row) => `<li>${escapeHtml(row.title)} · ${Math.round(row.durationSeconds / 60)} 分钟 · ${row.earnedCoins} 金币</li>`).join("")}</ul></section>`;
-  }
-  if (sub === "sleep") {
-    return `<section class="card"><h2>睡眠</h2><div class="row"><button data-action="/api/sleep/start">开始</button><button data-action="/api/sleep/finish">结束</button><button data-action="/api/sleep/cancel">取消</button></div>
-      <form id="manual-sleep" class="row"><label>哪一晚<input name="night" type="date" required></label><label>分钟<input name="minutes" type="number" min="30" max="1440" value="480"></label><button class="primary">补记</button></form>
-      <ul>${(lib.sleepRecords || []).slice(0, 8).map((row) => `<li>${hours(row.durationSeconds)} 小时 · ${row.score} 分 · 牧场 ${row.pastureYield}</li>`).join("")}</ul></section>`;
-  }
-  if (sub === "habits") {
-    return `<section class="card"><h2>习惯</h2><form id="habit-form" class="row"><input name="title" placeholder="打卡名称" required><input name="rewardCoins" type="number" min="1" max="10" value="5"><button class="primary">添加</button></form>${habitList(new Date())}</section>`;
-  }
-  if (sub === "chores") {
-    return `<section class="card"><h2>琐事</h2><form id="chore-form" class="row"><input name="title" placeholder="标题" required><button class="primary">添加</button></form><ul>${(lib.chores || []).map((row) => `<li><button data-post="/api/chores/toggle" data-body='${JSON.stringify({ id: row.id })}'>${row.isCompleted ? "已完成" : "完成"}</button> ${escapeHtml(row.title)} ${row.rewardClaimed ? "· 已领 5 金币" : ""}</li>`).join("")}</ul></section>`;
-  }
-  if (sub === "goals") {
-    return `<section class="card"><h2>长期目标</h2><form id="goal-form" class="row"><input name="title" placeholder="目标" required><button class="primary">添加</button></form><ul>${(lib.longGoals || []).map((row) => `<li>${escapeHtml(row.title)} · ${row.status}</li>`).join("")}</ul>
-      <h3>短期行动</h3><form id="action-form" class="row"><input name="title" placeholder="行动" required><input name="estimatedMinutes" type="number" min="1" value="25"><button class="primary">添加</button></form>
-      <ul>${(lib.shortActions || []).map((row) => `<li><button data-post="/api/actions/toggle" data-body='${JSON.stringify({ id: row.id })}'>${row.isCompleted ? "撤销完成" : "完成"}</button> ${escapeHtml(row.title)}</li>`).join("")}</ul></section>`;
-  }
-  return `<section class="card"><h2>统计</h2><p>连续打卡请在今天全部完成已安排项目后累计。导出使用 UTF-8 BOM。</p>
-    <div class="row"><a href="#" id="csv-focus">专注 CSV</a><a href="#" id="csv-sleep">睡眠 CSV</a><a href="#" id="csv-habits">打卡 CSV</a></div>
-    <p>近 7 条专注：${(lib.focusRecords || []).slice(0, 7).map((row) => Math.round(row.durationSeconds / 60)).join("、") || "无"}</p></section>`;
-}
-
-function habitList(day) {
-  const lib = state.library;
-  const items = (lib.habits || []).map((habit) => {
-    const key = `${habit.id}-${day.getFullYear()}-${day.getMonth() + 1}-${day.getDate()}`;
-    const done = (lib.habitCompletionKeys || []).includes(key);
-    return `<li><button data-post="/api/habits/toggle" data-body='${JSON.stringify({ id: habit.id })}'>${done ? "已打卡" : "打卡"}</button> ${escapeHtml(habit.title)} · ${habit.rewardCoins} 金币</li>`;
-  });
-  return `<ul>${items.join("")}</ul>`;
-}
-
-function renderHealth() {
-  const health = state.health;
-  if (!health || !health.available) return `<section class="card"><p>健康库没有打开。程序不会在缺失时新建空库。</p></section>`;
-  const island = health.island || {};
-  const points = (health.trends && health.trends.points) || [];
-  const max = Math.max(1, ...points.map((point) => point.water || 0));
-  return `<section class="card"><h2>今日</h2><p>饮水 ${Math.round(health.water || 0)} mL · 饮食 ${health.meals || 0} · 运动 ${Math.round(health.exerciseMinutes || 0)} 分钟 · 连续记录 ${health.streak || 0} 天</p>
-    <form id="water-form" class="row"><label>喝水 mL<input name="amount" type="number" value="${health.preferences.cup || 250}"></label><button class="primary">记录</button></form></section>
-    <section class="card"><h2>近 7 天饮水</h2><div class="bars">${points.map((point) => `<span title="${point.day}" style="height:${Math.max(4, (point.water / max) * 100)}%"></span>`).join("") || "<p>这几天没有饮水记录。</p>"}</div></section>
-    <section class="card"><h2>快速事项</h2><div class="row">${(health.eventTypes || []).map((item) => `<button data-event="${item.id}">${escapeHtml(item.name)}</button>`).join("")}</div></section>
-    <section class="card"><h2>荒岛</h2><p>水分 ${Math.round(island.water)} · 饱食 ${Math.round(island.food)} · 活力 ${Math.round(island.energy)} · 繁荣 ${island.prosperity}</p>
-      <p class="muted">这是计量和采集，不是 SceneKit 场景。</p>
-      <div class="row">${(state.catalog.islandActions || []).map((item) => `<button data-post="/api/health/act" data-body='${JSON.stringify({ id: item.id })}'>${escapeHtml(item.name)}</button>`).join("")}</div>
-      <div class="row">${(state.catalog.islandRecipes || []).slice(0, 8).map((item) => `<button data-post="/api/health/build" data-body='${JSON.stringify({ id: item.id })}'>${escapeHtml(item.name)}</button>`).join("")}<button data-post="/api/health/supply" data-body="{}">食用干粮</button></div></section>`;
-}
-
-function renderFootprints() {
-  const data = state.footprints;
-  if (!data || !data.available) return `<section class="card"><p>足迹库没有打开。程序不会在缺失时新建空库。</p></section>`;
-  const metrics = data.metrics || {};
-  return `<section class="card"><h2>到过的城市</h2><p>${metrics.cities || 0} 城 · ${metrics.countries || 0} 国家或地区 · 中国 ${metrics.china || 0}</p>
-    <canvas id="map" width="960" height="420"></canvas>
-    <form id="city-search" class="row"><input name="q" placeholder="搜索离线城市" required><button>搜索</button></form>
-    <div id="city-results"></div>
-    <p class="muted">坐标点来自离线城市表。没有 MapKit、在线瓦片和行政区多边形。</p></section>
-    <section class="card"><h2>旅行</h2><form id="trip-form" class="row"><input name="name" placeholder="旅行名称" required><button class="primary">添加</button></form>
-      <ul>${(data.trips || []).map((trip) => `<li>${escapeHtml(trip.name)}</li>`).join("")}</ul>
-      <ul>${(data.visits || []).slice(0, 12).map((visit) => `<li>${escapeHtml(visit.cityID)} · ${(visit.date && visit.date.precision) || "unknown"}</li>`).join("")}</ul></section>
-    <section class="card"><h2>旅行列车</h2><p>物资 ${data.train.materials || 0}。物资不换成节奏金币。</p>
-      <form id="depart-form" class="row"><input name="destinationID" placeholder="目的地城市 ID"><button>出发</button></form>
-      <button data-action="/api/footprints/train/arrive">到达</button></section>`;
-}
-
-function renderPlay() {
-  const lib = state.library;
-  return `<section class="card"><h2>农场</h2><p>${lib.coins} 金币</p><div class="row"><button data-action="/api/farm/buy-plot">买地</button></div>
-    ${(lib.farmPlots || []).map((plot) => `<p>田 ${plot.id.slice(0, 8)} · ${plot.cropID || "空"} · 成长 ${Math.round(plot.growthMinutes || 0)}
-      <button data-post="/api/farm/plant" data-body='${JSON.stringify({ plotID: plot.id, cropID: "carrot" })}'>种胡萝卜</button>
-      <button data-post="/api/farm/water" data-body='${JSON.stringify({ plotID: plot.id })}'>浇水</button>
-      <button data-post="/api/farm/harvest" data-body='${JSON.stringify({ plotID: plot.id })}'>收获</button></p>`).join("")}</section>
-    <section class="card"><h2>牧场</h2><p>窝位 ${lib.animalShelterCapacity} · 动物 ${(lib.pastureAnimals || []).length}</p>
-      <button data-action="/api/pasture/shelter">加窝</button>
-      <button data-post="/api/pasture/buy" data-body='{"animalID":"chicken"}'>买母鸡</button>
-      <button data-action="/api/pasture/collect">收产物</button></section>
-    <section class="card"><h2>渔场</h2><p>鱼饵 ${lib.bait}。抛竿后在咬钩的 5 秒窗口收线才会扣饵。</p>
-      <button data-action="/api/fish/cast">抛竿</button>
-      <button data-action="/api/fish/reel">收线</button>
-      <button data-action="/api/fish/sell">卖掉鱼篓</button>
-      <button data-action="/api/fish/aquarium-income">领水族馆</button></section>
-    <section class="card"><p class="muted">乐园里的画面是操作面板。Mac 版的贴图场景、菜单栏常驻和 WidgetKit 不在 Windows 上假装运行。</p></section>`;
-}
-
-function bind() {
-  document.querySelectorAll("[data-sub]").forEach((button) => { button.onclick = () => { sub = button.dataset.sub; render(); }; });
-  document.querySelectorAll("[data-action]").forEach((button) => { button.onclick = () => api(button.dataset.action, {}).then(render).catch(showError); });
-  document.querySelectorAll("[data-post]").forEach((button) => {
-    button.onclick = () => api(button.dataset.post, JSON.parse(button.dataset.body || "{}")).then(render).catch(showError);
-  });
-  const habit = document.querySelector("#habit-form");
-  if (habit) habit.onsubmit = (event) => submit(event, habit, "/api/habits/save");
-  const chore = document.querySelector("#chore-form");
-  if (chore) chore.onsubmit = (event) => {
-    event.preventDefault();
-    const today = new Date().toISOString().slice(0, 10);
-    api("/api/chores/save", { title: chore.title.value, startDate: today, endDate: today }).then(render).catch(showError);
+(() => {
+  "use strict";
+  const token = document.querySelector('meta[name="gao-token"]').content;
+  const app = document.querySelector("#app");
+  const editor = document.querySelector("#editor");
+  const sections = {
+    today: ["今天", "sun"],
+    rhythm: ["节奏", "timer", "专注、习惯与每一个小目标", [
+      ["focus", "工作专注", "timer"], ["sleep", "睡眠计时", "moon"], ["habits", "日常打卡", "check"],
+      ["chores", "一些琐事", "tray"], ["goals", "长期目标", "flag"], ["actions", "短期行动", "list"], ["statistics", "数据统计", "chart"]
+    ]],
+    health: ["健康", "heart", "照顾身体，不必成为负担。", [
+      ["overview", "今日", "heart"], ["records", "全部记录", "list"], ["trends", "统计趋势", "chart"], ["events", "快速事项", "grid"]
+    ]],
+    footprints: ["足迹", "map", "走过的地方，都有故事。", [
+      ["map", "地图", "map"], ["trips", "旅行", "case"], ["timeline", "时间轴", "clock"]
+    ]],
+    playground: ["乐园", "leaf", "认真生活，也尽情生长。", [
+      ["farm", "农场", "leaf"], ["pasture", "牧场", "paw"], ["fishing", "渔场", "fish"],
+      ["island", "荒岛生活", "tree"], ["train", "旅行列车", "train"]
+    ]]
   };
-  const goal = document.querySelector("#goal-form");
-  if (goal) goal.onsubmit = (event) => {
-    event.preventDefault();
-    const today = new Date().toISOString().slice(0, 10);
-    api("/api/goals/save", { title: goal.title.value, startDate: today, targetDate: today, status: "active" }).then(render).catch(showError);
+  const shapes = {
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/>',
+    timer: '<circle cx="12" cy="13" r="8"/><path d="M10 2h4m-2 0v3m0 4v5l3 2m3-10 2-2"/>',
+    moon: '<path d="M20 15A9 9 0 0 1 9 4a9 9 0 1 0 11 11ZM16 3v6m-3-3h6m1 2v4m-2-2h4"/>',
+    heart: '<path d="M21 9a4.5 4.5 0 0 0-9-1A4.5 4.5 0 0 0 3 9c0 4.5 9 11 9 11s9-6.5 9-11Z"/>',
+    map: '<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Zm6-3v15m6-12v15"/>',
+    leaf: '<path d="M21 3C12 3 6 7 6 13a5 5 0 0 0 5 5c6 0 10-6 10-15ZM3 21l12-11"/>',
+    check: '<circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/>',
+    circle: '<circle cx="12" cy="12" r="8"/>',
+    tray: '<path d="M3 12l3-7h12l3 7v7H3Zm0 0h5l1.5 3h5l1.5-3h5"/>',
+    flag: '<path d="M5 22V3m0 1c5-4 9 4 15 0v11c-6 4-10-4-15 0"/>',
+    list: '<rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4V2h6v2m-6 6h6m-6 4h6m-6 4h6"/>',
+    chart: '<path d="M3 3v18h19M7 17v-4m4 4V9m4 8v-5m4 5V6"/>',
+    grid: '<path d="M3 3h7v7H3zm11 0h7v7h-7zM3 14h7v7H3zm11 0h7v7h-7z"/>',
+    case: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V4h8v3M8 7v13m8-13v13"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',
+    home: '<path d="m3 11 9-8 9 8m-16-1v11h14V10m-9 11v-6h4v6"/>',
+    paw: '<ellipse cx="5" cy="9" rx="2" ry="3"/><ellipse cx="9" cy="5" rx="2" ry="3"/><ellipse cx="15" cy="5" rx="2" ry="3"/><ellipse cx="19" cy="9" rx="2" ry="3"/><path d="M12 11c3 0 7 5 7 7 0 3-4 3-7 1-3 2-7 2-7-1 0-2 4-7 7-7Z"/>',
+    fish: '<path d="M2 12s4-5 9-5 7 5 7 5l4-4v8l-4-4s-2 5-7 5-9-5-9-5Z"/><circle cx="7" cy="11" r=".6"/>',
+    tree: '<path d="m12 2 5 7h-2l5 6h-3l4 4H3l4-4H4l5-6H7Zm0 17v3"/>',
+    train: '<rect x="5" y="3" width="14" height="15" rx="3"/><path d="M5 11h14m-12 7-3 4m13-4 3 4M8 15h1m6 0h1M12 3v8"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    bolt: '<path d="m13 2-9 12h7l-1 8 10-12h-7Z"/>',
+    water: '<path d="M12 2S5 11 5 15a7 7 0 0 0 14 0c0-4-7-13-7-13Z"/>',
+    meals: '<path d="M5 3v7m3-7v7m3-7v7a3 3 0 0 1-6 0m3 3v8m10-18v18m0-18c-3 2-4 5-4 9h4"/>',
+    exercise: '<circle cx="15" cy="4" r="2"/><path d="m10 22 3-6-3-3m6 9-1-6m-7-5 4-4 4 4h4m-8-4-2 6-4 2"/>',
+    weight: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 11c0-4 10-4 10 0m-5 0 2-3"/>',
+    coin: '<circle cx="12" cy="12" r="9"/><path d="M12 6v12m-3-9h5a1.5 1.5 0 0 1 0 3h-4a1.5 1.5 0 0 0 0 3h5"/>',
+    settings: '<circle cx="12" cy="12" r="3"/><path d="m10 2-1 3-2 1-3-1-2 4 2 2v2l-2 2 2 4 3-1 2 1 1 3h4l1-3 2-1 3 1 2-4-2-2v-2l2-2-2-4-3 1-2-1-1-3Z"/>',
+    play: '<path d="m7 4 13 8-13 8Z"/>', pause: '<path d="M9 5v14m6-14v14"/>',
+    left: '<path d="m15 5-7 7 7 7"/>', right: '<path d="m9 5 7 7-7 7"/>',
+    diagonal: '<path d="M5 19 19 5M8 5h11v11"/>',
+    lock: '<rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3"/>',
+    download: '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
+    edit: '<path d="m4 16-1 5 5-1L20 8l-4-4-12 12Zm10-10 4 4"/>',
+    trash: '<path d="M4 6h16m-11 0V3h6v3M6 6l1 15h10l1-15m-8 3v8m4-8v8"/>',
+    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'
   };
-  const action = document.querySelector("#action-form");
-  if (action) action.onsubmit = (event) => submit(event, action, "/api/actions/save");
-  const manual = document.querySelector("#manual-sleep");
-  if (manual) manual.onsubmit = (event) => {
-    event.preventDefault();
-    api("/api/sleep/manual", { night: manual.night.value, minutes: Number(manual.minutes.value) }).then(render).catch(showError);
+  const aliases = {
+    "sun.max.fill": "sun", "checkmark.circle.fill": "check", "flag.checkered": "flag", "tray.full.fill": "tray",
+    "heart.fill": "heart", "moon.stars.fill": "moon", "leaf.fill": "leaf", "drop.fill": "water", "fork.knife": "meals",
+    "figure.walk": "exercise", "pawprint.fill": "paw", "fish.fill": "fish", "tram.fill": "train", "map.fill": "map",
+    "chart.bar.xaxis": "chart", "chevron.left": "left", "chevron.right": "right", "arrow.up.right": "diagonal",
+    "book.fill": "list", "bolt.fill": "bolt", "checkmark": "check", "circle.fill": "coin", "house.fill": "home",
+    "calendar": "grid", "bed.double.fill": "moon", "location.fill": "map", "plus.circle.fill": "plus",
+    "dumbbell.fill": "exercise", "flame.fill": "bolt", "water.waves": "water", "sparkles": "sun",
+    "drop": "water", "bed.double": "moon", "clock.arrow.circlepath": "clock", "gearshape": "settings",
+    "arrow.uturn.backward": "left", "arrow.triangle.2.circlepath": "clock", "pencil": "edit",
+    "square.stack.3d.up.fill": "list", "square.grid.3x3.fill": "grid", "chart.xyaxis.line": "chart",
+    "scalemass.fill": "weight", "figure.run": "exercise", "circle.dashed": "circle", "arrow.up.right": "diagonal"
   };
-  const water = document.querySelector("#water-form");
-  if (water) water.onsubmit = (event) => {
-    event.preventDefault();
-    api("/api/health/record", { kind: "water", amount: Number(water.amount.value), title: "喝水", slot: 0, note: "" }).then(render).catch(showError);
+  const english = {
+    "节奏":"Rhythm", "健康":"Health", "足迹":"Footprints", "乐园":"Playground", "今日":"Today",
+    "全部记录":"All records", "统计趋势":"Trends", "快速事项":"Quick events", "地图":"Map", "旅行":"Trips",
+    "时间轴":"Timeline", "常驻城市":"Home city", "记下足迹":"Record a visit", "健康记录":"Health records",
+    "把今天，过成自己的节奏。":"Make today your own rhythm.", "认真生活，也尽情生长。":"Live well and enjoy growing.",
+    "此刻专注":"Focus in progress", "正在睡眠计时":"Sleep timer running", "今天的第一小步":"Today’s first step",
+    "安心休息，记录会在后台继续":"Rest easy. The timer will continue in the background.",
+    "锁屏、熄屏和合盖不会中断睡眠记录":"The sleep timer continues when the display is off or Windows sleeps.",
+    "每日打卡提醒":"Daily habit reminder", "提醒时间":"Reminder time", "创建我的资料库":"Create my library",
+    "喝够八杯水":"Drink eight glasses of water", "整理桌面":"Tidy your desk", "阅读二十分钟":"Read for 20 minutes",
+    "完成第一次 25 分钟专注":"Complete your first 25-minute focus session",
+    "建立稳定的工作与休息节奏":"Build a steady work and rest routine",
+    "让每天的精力更可控，也为长期目标留出空间。":"Manage your energy and make time for longer-term goals.",
+    "连续四周保持规律专注与睡眠":"Keep a regular focus and sleep routine for four weeks",
+    "抛竿":"Cast", "收竿":"Reel in", "放下鱼竿":"Put down the rod", "水族馆":"Aquarium",
+    "取回鱼篓":"Return to fish basket", "收取全部":"Collect all", "收取产物":"Collect products",
+    "收获并出售":"Harvest and sell", "购买牲畜":"Buy an animal", "出售牲畜":"Sell animal", "搭窝":"Buy shelter",
+    "新增打卡":"New habit", "编辑打卡":"Edit habit", "新增琐事":"New chore", "编辑琐事":"Edit chore",
+    "新增长期目标":"New long-term goal", "编辑长期目标":"Edit long-term goal",
+    "新增短期行动":"New short action", "编辑短期行动":"Edit short action", "琐事月历":"Chore calendar",
+    "取消完成":"Mark incomplete", "标记完成":"Mark complete", "删除打卡目标？":"Delete this habit?",
+    "删除这项琐事？":"Delete this chore?", "删除长期目标？":"Delete this goal?", "删除短期行动？":"Delete this action?",
+    "删除睡眠记录？":"Delete this sleep record?", "前移":"Move earlier", "后移":"Move later",
+    "睡眠记录":"Sleep records", "起床并保存":"Wake and save", "开始睡眠":"Start sleep",
+    "待领取":"Pending", "装饰商店":"Decorations", "领取收益":"Collect earnings", "移入水族馆":"Move to aquarium"
   };
-  document.querySelectorAll("[data-event]").forEach((button) => {
-    button.onclick = () => api("/api/health/event", { typeID: button.dataset.event, count: 1 }).then(render).catch(showError);
-  });
-  const search = document.querySelector("#city-search");
-  if (search) search.onsubmit = async (event) => {
-    event.preventDefault();
-    const data = await api(`/api/cities?q=${encodeURIComponent(search.q.value)}`);
-    document.querySelector("#city-results").innerHTML = (data.cities || []).map((city) =>
-      `<button data-city="${city.id}" data-name="${escapeHtml(city.name)}">${escapeHtml(city.name)} ${escapeHtml(city.province || "")}</button>`
-    ).join(" ");
-    document.querySelectorAll("[data-city]").forEach((button) => {
-      button.onclick = () => api("/api/footprints/visit", { cityID: button.dataset.city, date: { precision: "unknown" }, note: "" }).then(render).catch(showError);
-    });
+
+  let state, translations = {}, page = "today", section = "today";
+  let dialogSubmit, confirmClose, clockReference, revision = 0, pending = 0, toastTimer, previousData, background;
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"})[c]);
+  const t = (zh, en) => state?.settings.language === "en" ? translations[zh] || en || english[zh] || zh : zh;
+  const localized = (zh, en) => esc(t(zh, en));
+  const locale = () => state?.settings.language === "en" ? "en-US" : "zh-CN";
+  const fromCocoa = value => new Date((Number(value) + 978307200) * 1000);
+  const instant = value => typeof value === "number" ? fromCocoa(value) : new Date(value);
+  const date = (value, options = {month: "short", day: "numeric"}) =>
+    value != null && Number.isFinite(instant(value).getTime()) ? instant(value).toLocaleString(locale(), options) : "—";
+  const localDay = (value = new Date()) => {
+    const d = instant(value);
+    return Number.isFinite(d.getTime()) ? [d.getFullYear(), d.getMonth()+1, d.getDate()].map(n => String(n).padStart(2,"0")).join("-") : "";
   };
-  const trip = document.querySelector("#trip-form");
-  if (trip) trip.onsubmit = (event) => submit(event, trip, "/api/footprints/trip");
-  const depart = document.querySelector("#depart-form");
-  if (depart) depart.onsubmit = (event) => {
-    event.preventDefault();
-    api("/api/footprints/train/depart", { destinationID: depart.destinationID.value }).then(render).catch(showError);
+  const currentClock = () => (state?.clock || Date.now() / 1000 - 978307200) + (performance.now() - clockReference) / 1000;
+  function duration(seconds, showSeconds = false) {
+    const s = Math.floor(Math.max(0, Number(seconds) || 0));
+    const hours = Math.floor(s / 3600), minutes = Math.floor(s / 60) % 60;
+    if (showSeconds) return [hours, minutes, s % 60].map(n => String(n).padStart(2,"0")).join(":");
+    return (hours ? hours + t(" 小时 ", " h ") : "") + minutes + t(" 分钟", " min");
+  }
+
+  function icon(name, className = "") {
+    return '<svg class="icon ' + esc(className) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      (shapes[aliases[name] || name] || shapes.circle) + '</svg>';
+  }
+
+  function button(label, {icon: glyph, className = "", action, go, type = "button", disabled = false, title} = {}) {
+    return '<button type="' + type + '" class="' + esc(className) + '"' +
+      (action ? ' data-action="' + esc(action) + '"' : "") + (go ? ' data-go="' + esc(go) + '"' : "") +
+      (title ? ' title="' + esc(title) + '" aria-label="' + esc(title) + '"' : "") + (disabled ? " disabled" : "") + ">" +
+      (glyph ? icon(glyph) : "") + (label ? "<span>" + esc(label) + "</span>" : "") + "</button>";
+  }
+
+  function card(title, body, {className = "", subtitle, actions} = {}) {
+    return '<section class="card ' + esc(className) + '">' + (title || actions ? '<div class="card-head"><div>' +
+      (title ? "<h2>" + esc(title) + "</h2>" : "") + (subtitle ? '<p class="muted">' + esc(subtitle) + "</p>" : "") +
+      '</div>' + (actions ? '<div class="row card-actions">' + actions + "</div>" : "") + "</div>" : "") + body + "</section>";
+  }
+  const header = (title, subtitle = "", actions = "") => '<div class="page-head row"><div><h1>' + esc(title) + "</h1>" +
+    (subtitle ? '<p class="muted">' + esc(subtitle) + "</p>" : "") + "</div>" +
+    (actions ? '<div class="row">' + actions + "</div>" : "") + "</div>";
+  const empty = text => '<p class="empty">' + esc(text) + "</p>";
+  const rows = (items, format, message = t("暂无记录", "No records yet")) =>
+    items?.length ? '<div class="rows">' + items.map(format).join("") + "</div>" : empty(message);
+  const item = (label, details = "", actions = "", glyph = "list", {color = ""} = {}) => '<div class="data-row"><span class="glyph ' +
+    esc(color) + '">' + icon(glyph) + '</span><div class="data-copy"><strong>' + esc(label) + '</strong>' +
+    (details ? '<div class="muted">' + esc(details) + "</div>" : "") + '</div><div class="row data-actions">' + actions + "</div></div>";
+  const tile = (value, text, glyph, color = "") => '<div class="card tile"><span class="glyph ' + esc(color) + '">' + icon(glyph) +
+    '</span><div><strong>' + esc(value) + '</strong><span class="muted">' + esc(text) + "</span></div></div>";
+  const field = (label, contents) => '<label class="field"><span>' + esc(label) + "</span>" + contents + "</label>";
+  const input = (name, label, value = "", attributes = {}) => field(label, '<input name="' + esc(name) + '" value="' +
+    esc(value) + '"' + Object.entries(attributes).map(([key, val]) => val === true ? " " + key : val === false ? "" :
+      " " + key + '="' + esc(val) + '"').join("") + ">");
+  const select = (name, label, choices, value = "") => field(label, '<select name="' + esc(name) + '">' +
+    choices.map(([key, labelText]) => '<option value="' + esc(key) + '"' + (String(key) === String(value) ? " selected" : "") +
+      ">" + esc(labelText) + "</option>").join("") + "</select>");
+  const textarea = (name, label, value = "") => field(label, '<textarea name="' + esc(name) + '" rows="3">' + esc(value) + "</textarea>");
+  const checkbox = (name, label, checked) => '<label class="check-field"><input type="checkbox" name="' + esc(name) +
+    '"' + (checked ? " checked" : "") + "><span>" + esc(label) + "</span></label>";
+
+  function authorizedFetch(path, options = {}) {
+    return fetch(path, {...options, headers: {...options.headers, "X-Gao-Token": token}});
+  }
+  function applyState(next) {
+    state = next;
+    clockReference = performance.now();
+    document.documentElement.lang = state.settings.language;
+    document.documentElement.dataset.theme = state.settings.appearance;
+    document.documentElement.style.setProperty("--custom-paper", /^#[0-9a-f]{6}$/i.test(state.settings.backgroundHex)
+      ? state.settings.backgroundHex : "var(--base-paper)");
+    document.title = t("搞节奏", "Rhythm");
+  }
+  async function api(path, body) {
+    const post = body !== undefined;
+    if (post) { pending++; revision++; }
+    const requested = revision;
+    try {
+      const response = await authorizedFetch(path, post ? {
+        method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)
+      } : {});
+      const data = await response.json();
+      if (!response.ok || data.ok === false) {
+        throw Object.assign(new Error(data.error || response.statusText),{code:data.code,status:response.status});
+      }
+      if (requested === revision) {
+        if (data.state) applyState(data.state);
+        if (path === "/api/state" && !pending) applyState(data);
+      }
+      return data;
+    } finally {
+      if (post) pending--;
+    }
+  }
+  function notice(message, type = "success") {
+    if (!message) return;
+    const toast = document.querySelector("#notice");
+    toast.textContent = message;
+    toast.dataset.type = type;
+    toast.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { toast.hidden = true; }, type === "error" ? 8500 : 4500);
+  }
+  async function act(path, body = {}, options = {}) {
+    try {
+      const data = await api(path, body);
+      if (options.render !== false) render();
+      notice(data.result?.message || data.result?.reason || options.message);
+      return data;
+    } catch (error) {
+      if (options.throw) throw error;
+      notice(error.message, "error");
+      return null;
+    }
+  }
+  const formBody = form => Object.fromEntries(new FormData(form));
+  function modal(title, html, onSubmit, options = {}) {
+    const form = editor.querySelector("form");
+    editor.querySelector("h2").textContent = title;
+    editor.querySelector(".dialog-body").innerHTML = html;
+    editor.querySelector(".dialog-error").hidden = true;
+    editor.querySelector(".dialog-footer").innerHTML = button(t("取消", "Cancel"), {action:"close", className:"secondary"}) +
+      (onSubmit ? button(options.submitLabel || t("保存", "Save"), {type:"submit", className:options.danger ? "danger" : "primary"}) : "");
+    dialogSubmit = onSubmit;
+    confirmClose = options.confirmClose;
+    editor.dataset.variant = options.className || "";
+    if (!editor.open) editor.showModal();
+    form.querySelector(".dialog-body input:not([type=hidden]), .dialog-body select, .dialog-body textarea")?.focus();
+    return form;
+  }
+  const closeModal = () => {
+    if (!confirmClose || confirmClose()) editor.close();
   };
-  drawMap();
-  ["focus", "sleep", "habits"].forEach((name) => {
-    const link = document.querySelector(`#csv-${name}`);
-    if (!link) return;
-    link.onclick = async (event) => {
-      event.preventDefault();
-      const response = await fetch(`/api/export/${name}.csv`, { headers: { "X-Gao-Token": token } });
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+  const confirm = (title, details, path, payload) => modal(title, "<p>" + esc(details) + "</p>",
+    async () => { await act(path, payload, {throw:true}); }, {danger:true, submitLabel:t("确认","Confirm")});
+
+  async function download(path, filename) {
+    try {
+      const response = await authorizedFetch(path);
+      if (!response.ok) throw new Error(t("导出失败。","Export failed."));
+      const url = URL.createObjectURL(await response.blob());
       const anchor = document.createElement("a");
       anchor.href = url;
-      anchor.download = `${name}.csv`;
+      anchor.download = filename;
       anchor.click();
-    };
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) { notice(error.message, "error"); }
+  }
+  function go(nextPage, nextSection) {
+    if (!sections[nextPage]) return;
+    const oldPage = page, oldSection = section;
+    page = nextPage;
+    section = nextSection || ({today:"today",playground:"index"}[page] || sections[page][3][0][0]);
+    window.EstateUI?.leave?.(oldPage, oldSection, page, section);
+    window.HealthUI?.leave?.(oldPage, oldSection, page, section);
+    render();
+    if (oldPage !== page || oldSection !== section) window.scrollTo(0, 0);
+  }
+  function route(raw) {
+    if (!raw) return;
+    let url;
+    try { url = new URL(raw); } catch { return; }
+    const host = url.hostname.toLowerCase();
+    const leadingPath = url.pathname.split("/").filter(Boolean)[0]?.toLowerCase();
+    const target = leadingPath || host;
+    if (url.protocol === "gaojiankang:" || host === "health") {
+      const kind = ["water","sleep","meal","exercise","weight"].includes(target);
+      if (["island","game"].includes(target)) go("playground", "island");
+      else go("health", kind ? "records-" + target : ["records","events","trends"].includes(target) ? target : "overview");
+    } else if (url.protocol === "gaozuji:" || host === "footprints") {
+      if (["train","game"].includes(target)) go("playground","train");
+      else go("footprints", ["trips","timeline"].includes(target) ? target :
+        ["resident-city","residentcity","home"].includes(target) ? "resident" : "map");
+    } else if (url.protocol === "gaojiezou:") {
+      const rhythm = {longgoals:"goals",shortactions:"actions",focus:"focus",sleep:"sleep",habits:"habits",chores:"chores",statistics:"statistics"};
+      if (rhythm[host]) go("rhythm",rhythm[host]);
+      else if (["farm","pasture","fishing"].includes(host)) go("playground",host);
+      else go("today");
+    }
+  }
+  function menu(glyph, label, actions) {
+    return '<details class="menu"><summary class="' + (glyph === "plus" ? "record-button" : "more-button") + '" aria-label="' +
+      esc(label) + '">' + icon(glyph) + (glyph === "plus" ? "<span>" + esc(label) + "</span>" : "") +
+      '</summary><div class="menu-panel">' + actions + "</div></details>";
+  }
+  function navButton(id, label, glyph, current, type) {
+    return '<button type="button" data-go="' + id + '" class="' + type + (current ? " selected" : "") +
+      '"' + (current ? ' aria-current="page"' : "") + ">" + icon(glyph) + "<span>" + localized(label) + "</span></button>";
+  }
+  function navigation() {
+    document.querySelector("#brand-title").textContent = t("搞节奏","Rhythm");
+    document.querySelector(".skip").textContent = t("跳至内容","Skip to content");
+    document.querySelector("#workspaces").innerHTML = Object.entries(sections).map(([id,[label,glyph]]) =>
+      navButton(id,label,glyph,id === page,"pill")).join("");
+    document.querySelector("#toolbar").innerHTML = menu("plus",t("记录","Record"),[
+      ["开始专注","rhythm/focus","play"],["记录睡眠","rhythm/sleep","moon"],["日常打卡","rhythm/habits","check"],
+      ["健康记录","health","heart"],["记下足迹","footprints","map"]
+    ].map(([label,to,glyph]) => button(t(label), {go:to,icon:glyph})).join("")) + menu("more",t("更多","More"),
+      button(t("设置","Settings"),{action:"settings",icon:"settings"}) +
+      button(t("桌面小组件","Desktop widgets"),{action:"widgets",icon:"grid"}) + button(t("退出","Quit"),{action:"quit",icon:"right"}));
+    const bar = document.querySelector("#subbar");
+    bar.hidden = page === "today" || (page === "playground" && section === "index");
+    if (bar.hidden) { bar.innerHTML = ""; return; }
+    const tabs = [...sections[page][3]];
+    if (page === "footprints" && section === "resident") tabs.push(["resident","常驻城市","home"]);
+    const trailing = page === "footprints" ? window.FootprintsUI?.actions?.(section) :
+      page === "health" ? window.HealthUI?.actions?.(section) : "";
+    bar.innerHTML = (page === "playground" ? button(t("乐园"),{go:"playground",icon:"left",className:"plain sub-back"}) : "") +
+      '<nav class="subtabs" aria-label="' + localized("工作台栏目","Workspace sections") + '">' + tabs.map(([id,label,glyph]) =>
+        navButton(page + "/" + id,label,glyph,section === id || section.startsWith(id + "-"),"tab")).join("") +
+      '</nav><div class="row sub-actions">' + (trailing || "") + "</div>";
+  }
+  function fingerprint() {
+    const localClock = state?.clock ? localDay(state.clock) : "";
+    return JSON.stringify([state.status,state.notice,state.sleepSyncError,state.library,state.settings,state.health,state.footprints,state.cast,localClock]);
+  }
+  function render() {
+    if (!state) return;
+    navigation();
+    app.dataset.workspace = page;
+    app.dataset.section = section;
+    app.removeAttribute("aria-busy");
+    if (state.status !== "ready") {
+      const fresh = state.status === "missing";
+      app.innerHTML = '<div class="workspace normal">' + header(fresh ? t("资料库尚未创建","Create your library") :
+        t("资料库暂不可用","Library unavailable")) + card("", "<p>" + esc(state.notice || t("请先创建你的本机资料库。","Create your local library to get started.")) + "</p>" +
+        (fresh ? button(t("创建我的资料库","Create my library"),{action:"create",className:"primary",icon:"plus"}) : "")) + "</div>";
+    } else {
+      let module = window.RhythmUI;
+      if (page === "footprints" || section === "train") module = window.FootprintsUI;
+      else if (page === "health" || section === "island") module = window.HealthUI;
+      else if (page === "playground") module = window.EstateUI;
+      const integrated = module === window.HealthUI || module === window.FootprintsUI;
+      const content = module?.render(section) || empty(t("该页面暂不可用。","This page is unavailable."));
+      app.innerHTML = (state.notice ? '<aside class="workspace-warning">' + esc(state.notice) + "</aside>" : "") +
+        (integrated ? '<div class="integrated-workspace">' + content + "</div>" : content);
+      module?.bind?.(section);
+      tick();
+    }
+    previousData = fingerprint();
+  }
+  function tick() {
+    window.RhythmUI?.tick?.();
+    window.EstateUI?.tick?.();
+    window.FootprintsUI?.tick?.();
+  }
+  async function refresh({onlyChange = false} = {}) {
+    if (pending) return;
+    await api("/api/state");
+    if (!state) return;
+    if (!onlyChange || (fingerprint() !== previousData && !editor.open &&
+      !document.querySelector("details[open], main :is(input,textarea,select):focus"))) render();
+    else tick();
+  }
+  function settings() {
+    const p = state.settings;
+    background = p.backgroundHex;
+    const labels = [["focus","专注 CSV","Focus CSV"],["sleep","睡眠 CSV","Sleep CSV"],["habits","打卡 CSV","Habit CSV"]];
+    const body = '<div class="settings-section"><h3>' + localized("外观") + '</h3><div class="form-grid">' +
+      select("appearance",t("界面模式"),[["system",t("跟随系统")],["light",t("浅色")],["dark",t("深色")]],p.appearance) +
+      select("language",t("语言","Language"),[["zh-Hans","简体中文"],["en","English"]],p.language) + '</div><div class="row">' +
+      input("backgroundHex",t("背景颜色"),p.backgroundHex || "#f4f0e8",{type:"color"}) +
+      button(t("恢复系统颜色"),{action:"reset-color",className:"secondary"}) + '</div></div><div class="settings-section"><h3>' +
+      localized("睡眠") + "</h3>" + input("sleepTargetHours",t("睡眠目标（小时）","Sleep target (hours)"),p.sleepTargetHours,{type:"number",min:5,max:12,step:.5,required:true}) +
+      '</div><div class="settings-section"><h3>' + localized("提醒") + "</h3>" +
+      checkbox("habitReminderEnabled",t("每日打卡提醒"),p.habitReminderEnabled) +
+      input("reminderTime",t("提醒时间"),[p.habitReminderHour,p.habitReminderMinute || 0].map(n => String(n).padStart(2,"0")).join(":"),{type:"time",required:true}) +
+      '</div><div class="settings-section"><h3>' + localized("关于","About") + '</h3><p class="muted">Windows ' + esc(state.version) +
+      ' · <code>%APPDATA%\\GaoSeries\\Rhythm</code></p><div class="row">' + labels.map(([key,zh,en]) =>
+        button(t(zh,en),{action:"csv:" + key,icon:"download",className:"secondary",disabled:state.status !== "ready"})).join("") +
+      button(t("导出诊断信息","Export diagnostics"),{action:"diagnostics",icon:"download",className:"secondary"}) + "</div></div>";
+    const form = modal(t("设置"),body,async data => {
+      const [hour,minute] = data.reminderTime.split(":").map(Number);
+      await act("/api/settings",{...data,habitReminderEnabled:data.habitReminderEnabled === "on",
+        habitReminderHour:hour,habitReminderMinute:minute,backgroundHex:background},{throw:true});
+    });
+    form.elements.backgroundHex.addEventListener("input",event => { background = event.target.value; });
+  }
+  function closeMenus() {
+    document.querySelectorAll(".menu[open]").forEach(menu => { menu.open = false; });
+  }
+
+  window.Gao = {
+    get state() { return state; }, get page() { return page; }, get section() { return section; },
+    sections,t,esc,localized,locale,icon,button,card,header,rows,item,tile,empty,date,localDay,fromCocoa,duration,currentClock,
+    input,select,textarea,checkbox,authorizedFetch,api,act,refresh,render,go,modal,closeModal,confirm,notice,formBody,download
+  };
+  editor.addEventListener("click",event => {
+    if ((event.target === editor || event.target.closest("[data-close]")) && !editor.querySelector("form").dataset.saving) closeModal();
   });
-}
-
-function drawMap() {
-  const canvas = document.querySelector("#map");
-  if (!canvas || !state.footprints) return;
-  const context = canvas.getContext("2d");
-  context.clearRect(0, 0, canvas.width, canvas.height);
-  context.strokeStyle = "#9bbfb4";
-  context.strokeRect(8, 8, canvas.width - 16, canvas.height - 16);
-  (state.footprints.plotted || []).forEach((city) => {
-    const x = ((Number(city.longitude) + 180) / 360) * canvas.width;
-    const y = ((90 - Number(city.latitude)) / 180) * canvas.height;
-    context.fillStyle = "#c46b2d";
-    context.beginPath();
-    context.arc(x, y, 5, 0, Math.PI * 2);
-    context.fill();
-    context.fillStyle = "#2a241c";
-    context.fillText(city.name, x + 8, y + 4);
+  editor.addEventListener("cancel",event => {
+    event.preventDefault();
+    if (!editor.querySelector("form").dataset.saving) closeModal();
   });
-}
-
-function submit(event, form, path) {
-  event.preventDefault();
-  const body = Object.fromEntries(new FormData(form).entries());
-  if (body.rewardCoins) body.rewardCoins = Number(body.rewardCoins);
-  if (body.estimatedMinutes) body.estimatedMinutes = Number(body.estimatedMinutes);
-  api(path, body).then(render).catch(showError);
-}
-
-function showError(error) {
-  alert(error.message || String(error));
-}
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
-}
-
-document.querySelector("#quit").onclick = () => api("/api/shutdown", {}).catch(() => {});
-refresh().catch(showError);
+  editor.querySelector("form").addEventListener("submit",async event => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    if (!dialogSubmit || form.dataset.saving) return;
+    const submit = form.querySelector("[type=submit]");
+    const message = form.querySelector(".dialog-error");
+    form.dataset.saving = "true";
+    message.hidden = true;
+    submit.disabled = true;
+    try {
+      if (await dialogSubmit(formBody(form),form) !== false) editor.close();
+    } catch (error) {
+      message.hidden = false;
+      message.textContent = error.message;
+    } finally {
+      delete form.dataset.saving;
+      submit.disabled = false;
+    }
+  });
+  document.addEventListener("click",async event => {
+    const target = event.target.closest("button");
+    if (!event.target.closest(".menu") || target) closeMenus();
+    if (!target?.matches("[data-go],[data-action]")) return;
+    if (target.dataset.go) { go(...target.dataset.go.split("/")); return; }
+    const action = target.dataset.action;
+    if (action === "close" && !editor.querySelector("form").dataset.saving) closeModal();
+    if (action === "create") await act("/api/library/create");
+    if (action === "settings") settings();
+    if (action === "widgets") await act("/api/platform/widgets",{},{render:false});
+    if (action === "diagnostics") await download("/api/export/diagnostics.txt","Rhythm-diagnostics.txt");
+    if (action === "quit") modal(t("退出搞节奏？","Quit Rhythm?"),"<p>" +
+      localized("应用将保存记录并暂停正在运行的专注。","Rhythm will save records and pause any running focus session.") + "</p>",async () => {
+        await act("/api/shutdown",{},{throw:true,render:false});
+        document.querySelector(".chrome").hidden = true;
+        app.innerHTML = empty(t("搞节奏已退出。","Rhythm has quit."));
+        clearInterval(poll);
+        window.close();
+      },{submitLabel:t("退出","Quit")});
+    if (action === "reset-color") {
+      background = "";
+      editor.querySelector('[name="backgroundHex"]').value = "#f4f0e8";
+    }
+    if (action.startsWith("csv:")) {
+      const key = action.split(":")[1];
+      const filenames = {focus:"focus-records.csv",sleep:"sleep-records.csv",habits:"habit-completions.csv"};
+      await download("/api/export/" + key + ".csv",filenames[key]);
+    }
+  });
+  document.addEventListener("keydown",event => {
+    if (event.key === "Escape" && !editor.open) closeMenus();
+    if (editor.open || event.altKey || event.metaKey || event.target.closest?.("input,textarea,select,button,a,summary")) return;
+    if (event.ctrlKey && /^[0-5]$/.test(event.key)) {
+      event.preventDefault();
+      go(Object.keys(sections)[Math.max(0,Number(event.key)-1)]);
+    } else if (event.code === "Space" && page === "rhythm" && section === "focus") {
+      event.preventDefault();
+      app.querySelector("[data-focus-shortcut]")?.click();
+    }
+  });
+  const poll = setInterval(() => {
+    if (!document.hidden) refresh({onlyChange:true}).catch(() => {});
+  },5000);
+  setInterval(tick,125);
+  document.addEventListener("visibilitychange",() => {
+    if (!document.hidden) refresh({onlyChange:true}).catch(() => {});
+  });
+  document.addEventListener("DOMContentLoaded",async () => {
+    try {
+      translations = await fetch("/localization/en.json").then(response => response.json()).catch(() => ({}));
+      await refresh();
+      route(new URLSearchParams(location.search).get("route"));
+    } catch (error) {
+      app.innerHTML = empty(error.message);
+    }
+  });
+})();

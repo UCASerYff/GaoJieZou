@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
+from gaojiezou.desktop import DesktopInstance, WindowsDesktop, open_window, route_index
 from gaojiezou.errors import AppError
 from gaojiezou.store import RhythmStore, default_data_dir
 from gaojiezou.version import VERSION_LABEL
@@ -21,11 +23,32 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--create-empty", action="store_true")
     parser.add_argument("--inspect", action="store_true")
     parser.add_argument("--widget-snapshot", action="store_true")
+    parser.add_argument("--widgets", action="store_true", help="打开桌面小组件")
+    parser.add_argument("link", nargs="?", help="打开搞节奏链接")
     args = parser.parse_args(argv)
     if args.version:
         print(VERSION_LABEL)
         return 0
-    directory = default_data_dir() if not args.data_dir else __import__("pathlib").Path(args.data_dir)
+    try:
+        route = route_index(args.link)
+    except ValueError as exc:
+        parser.error(str(exc))
+    directory = Path(args.data_dir) if args.data_dir else default_data_dir()
+    instance = DesktopInstance(directory) if sys.platform == "win32" else None
+    try:
+        if instance and not instance.owner:
+            if not (args.inspect or args.widget_snapshot or args.create_empty or args.no_browser or args.port):
+                if instance.forward(route, args.widgets):
+                    return 0
+            print("此资料库正在使用。", file=sys.stderr)
+            return 2
+        return _run(args, directory, instance, route)
+    finally:
+        if instance:
+            instance.close()
+
+
+def _run(args, directory: Path, instance: DesktopInstance | None, route: int) -> int:
     store = RhythmStore(directory)
     try:
         if args.create_empty:
@@ -46,20 +69,34 @@ def main(argv: list[str] | None = None) -> int:
     except AppError as exc:
         print(exc.message, file=sys.stderr)
         return 2
-    if args.inspect:
-        return 0
-    server = serve(store, port=args.port, open_browser=not args.no_browser)
+    server = serve(store, port=args.port, open_browser=False)
+    desktop = WindowsDesktop(server, instance.name, tray=not args.no_browser) if instance else None
     try:
+        if desktop:
+            desktop.start()
+        server.desktop = desktop
+        if args.widgets and desktop:
+            desktop.show_widgets()
+        elif not args.no_browser:
+            open_window(server.url, route)
         server.shutdown_requested.wait()
     except KeyboardInterrupt:
         pass
+    except OSError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     finally:
+        server.shutdown()
+        if desktop:
+            desktop.close()
         try:
-            store.prepare_for_exit()
+            with server.lock:
+                store.prepare_for_exit()
         except AppError as exc:
             print(exc.message, file=sys.stderr)
             return 2
-        server.server_close()
+        finally:
+            server.server_close()
     return 0
 
 

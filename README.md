@@ -129,4 +129,4 @@ V4.12 不提供或生成完整资料备份、模块备份和每日自动快照�
 
 ## Windows 版
 
-Windows 10/11 x64 的独立版本在 [`windows/`](windows/README.md)。它使用 Python 标准库和本机浏览器界面，节奏资料仍是 schema 11 的 `library.json`，健康、足迹和共享睡眠沿用各自的 SQLite。构建由 GitHub Actions 的 `windows-latest` 完成。功能对齐、运行方式和已知差异见 [windows/README.md](windows/README.md)。Windows 版使用 `%APPDATA%\GaoSeries\Rhythm\`，不读取 macOS 的 App Group，也不修改 Mac 版源码、签名或版本号。
+Windows 10/11 x64 版提供 **4.12** 安装包、后台计时、系统提醒和桌面小组件。节奏资料继续使用 schema 11，健康、足迹和共同睡眠使用本机 SQLite。安装、构建与平台差异见 [Windows 版说明](windows/README.md)。

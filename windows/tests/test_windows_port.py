@@ -42,7 +42,7 @@ def ready(tmp_path: Path, moment=None) -> tuple[RhythmStore, Clock]:
 
 
 def test_version_label():
-    assert VERSION_LABEL == "4.12+1"
+    assert VERSION_LABEL == "4.12+2"
 
 
 def test_create_preserves_unknown_field_and_omits_owned_animals(tmp_path):
@@ -86,6 +86,25 @@ def test_non_empty_directory_is_not_a_new_library(tmp_path):
     assert not (tmp_path / LIBRARY_NAME).exists()
 
 
+def test_windows_legacy_and_unreadable_settings_survive_record_updates(tmp_path):
+    store, clock = ready(tmp_path)
+    settings = tmp_path / "settings.json"
+    settings.write_text('{"habitReminderHour":20,"legacySetting":{"value":true}}', encoding="utf-8")
+    migrated = RhythmStore(tmp_path, tz=UTC, clock=clock)
+    assert migrated.settings["habitReminderHour"] == 20
+    assert migrated.settings["habitReminderMinute"] == 0
+    migrated.update_settings({"habitReminderMinute": 15})
+    assert json.loads(settings.read_text(encoding="utf-8"))["legacySetting"] == {"value": True}
+
+    settings.write_bytes(b"{")
+    protected = RhythmStore(tmp_path, tz=UTC, clock=clock)
+    assert protected.status == "ready"
+    protected.start_focus()
+    with pytest.raises(AppError):
+        protected.update_settings({"habitReminderMinute": 30})
+    assert settings.read_bytes() == b"{"
+
+
 def test_focus_coins_growth_and_segment_cap(tmp_path):
     store, clock = ready(tmp_path)
     plot_id = store.library["farmPlots"][0]["id"]
@@ -106,6 +125,56 @@ def test_focus_coins_growth_and_segment_cap(tmp_path):
     store.pause_focus(for_system=False)
     assert store.library["activeFocus"]["accumulatedSeconds"] == pytest.approx(8 * 3600)
     assert store.library["activeFocus"]["pausedForSystem"] is False
+
+
+def test_plot_does_not_receive_focus_before_planting_and_keeps_legacy_fields(tmp_path):
+    store, clock = ready(tmp_path)
+    plot = store.library["farmPlots"][0]
+    plot["legacyField"] = {"preserved": True}
+    store.start_focus()
+    clock.moment += timedelta(minutes=30)
+    store.plant(plot["id"], "carrot")
+    clock.moment += timedelta(minutes=20)
+    store.synchronize()
+    assert plot["growthMinutes"] == 20
+    assert store.harvest_all() == (0, 0)
+    clock.moment += timedelta(minutes=30)
+    assert store.harvest_all() == (1, 7)
+    assert plot["legacyField"] == {"preserved": True}
+    assert "cropID" not in plot
+    assert store.harvest_all() == (0, 0)
+
+
+def test_goal_edits_keep_action_dates_and_deletion_only_unlinks(tmp_path):
+    store, _clock = ready(tmp_path)
+    goal = store.library["longGoals"][0]
+    action = store.save_action({
+        "goalID": goal["id"],
+        "title": "Scheduled action",
+        "startDate": "2026-11-16",
+        "endDate": "2026-11-18",
+        "estimatedMinutes": 30,
+    })
+    store.save_goal({**goal, "status": "completed"})
+    assert store.library["shortActions"][-1]["id"] == action["id"]
+    assert action["startDate"] < action["endDate"] == action["dueDate"]
+    store.delete_goal(goal["id"])
+    assert "goalID" not in action
+    assert action["startDate"] < action["endDate"]
+    store.delete_action(action["id"])
+    assert all(row["id"] != action["id"] for row in store.library["shortActions"])
+
+
+def test_sell_one_and_return_aquarium_fish(tmp_path):
+    store, _clock = ready(tmp_path)
+    store.library["fishInventory"] = {"crucian": 3}
+    assert store.sell_one_fish("crucian") == catalog.fish("crucian")[3]
+    assert store.library["fishInventory"]["crucian"] == 2
+    assert store.move_to_aquarium("crucian")
+    resident = store.library["aquariumFish"][0]
+    store.return_aquarium_fish(resident["id"])
+    assert not store.library["aquariumFish"]
+    assert store.library["fishInventory"]["crucian"] == 2
 
 
 def test_short_focus_earns_nothing_and_cap_is_20(tmp_path):

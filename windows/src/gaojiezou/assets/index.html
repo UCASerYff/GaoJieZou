@@ -5,18 +5,35 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="gao-token" content="{{TOKEN}}">
   <title>搞节奏</title>
+  <link rel="icon" href="/art/GaoJieZouIcon.png">
   <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/health-ui.css">
+  <link rel="stylesheet" href="/footprints-ui.css">
+  <script defer src="/app.js"></script>
+  <script defer src="/rhythm-ui.js"></script>
+  <script defer src="/health-ui.js"></script>
+  <script defer src="/estate-ui.js"></script>
+  <script defer src="/footprints-ui.js"></script>
 </head>
 <body>
-  <header>
-    <div>
-      <strong>搞节奏</strong>
-      <span class="muted">Windows {{VERSION}}</span>
+  <a class="skip" href="#app">跳至内容</a>
+  <header class="chrome">
+    <div class="topbar">
+      <button class="brand plain" type="button" data-go="today"><img src="/art/GaoJieZouIcon.png" width="34" height="34" alt=""><strong id="brand-title">搞节奏</strong></button>
+      <nav id="workspaces" class="workspaces" aria-label="工作台"></nav>
+      <div id="toolbar" class="toolbar"></div>
     </div>
-    <nav id="workspaces"></nav>
-    <button id="quit" type="button">退出</button>
+    <div id="subbar" class="subbar" hidden></div>
   </header>
-  <main id="app"></main>
-  <script src="/app.js"></script>
+  <main id="app" tabindex="-1" aria-busy="true"><p class="empty">正在打开搞节奏…</p></main>
+  <p id="notice" class="toast" role="status" hidden></p>
+  <dialog id="editor" aria-labelledby="editor-title">
+    <form class="dialog-form">
+      <div class="dialog-head"><h2 id="editor-title"></h2><button class="plain icon-only" type="button" data-close aria-label="关闭">×</button></div>
+      <div class="dialog-body"></div>
+      <p class="dialog-error" role="alert" hidden></p>
+      <div class="dialog-footer"></div>
+    </form>
+  </dialog>
 </body>
 </html>
