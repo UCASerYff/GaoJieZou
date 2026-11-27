@@ -17,6 +17,7 @@ private struct LongGoalEditorRoute: Identifiable {
 
 struct LongGoalDashboard: View {
     @EnvironmentObject private var store: RhythmStore
+    var reviewRecordID: String? = nil
     @State private var editorRoute: LongGoalEditorRoute?
     @State private var deleteCandidate: LongGoal?
 
@@ -24,7 +25,7 @@ struct LongGoalDashboard: View {
     private var completedCount: Int { store.longGoals.filter { $0.status == .completed }.count }
 
     var body: some View {
-        ScrollView {
+        WeeklyReviewRecordScroll(target: reviewRecordID) {
             VStack(spacing: 16) {
                 HStack(spacing: 12) {
                     StatTile(value: "\(activeCount)", label: "进行中", symbol: "play.circle.fill", color: RhythmTheme.blue)
@@ -47,6 +48,9 @@ struct LongGoalDashboard: View {
                     .buttonStyle(.borderedProminent)
                 }
 
+                if let reviewRecordID, !store.longGoals.contains(where: { $0.id == reviewRecordID }) {
+                    WeeklyReviewMissingRecord().id(reviewRecordID)
+                }
                 if store.longGoals.isEmpty {
                     EmptyStateView(symbol: "flag.checkered", title: "还没有长期目标", message: "描述想达到的结果、衡量方式和期望日期，再把它拆成短期行动。", actionTitle: "新建长期目标") {
                         editorRoute = .create()
@@ -59,6 +63,8 @@ struct LongGoalDashboard: View {
                             } delete: {
                                 deleteCandidate = goal
                             }
+                            .weeklyReviewHighlight(goal.id == reviewRecordID)
+                            .id(goal.id)
                         }
                     }
                 }
@@ -280,6 +286,7 @@ private struct ShortActionEditorRoute: Identifiable {
 
 struct ShortActionDashboard: View {
     @EnvironmentObject private var store: RhythmStore
+    var reviewRecordID: String? = nil
     @State private var editorRoute: ShortActionEditorRoute?
     @State private var deleteCandidate: ShortAction?
     @State private var goalFilter: String?
@@ -294,7 +301,7 @@ struct ShortActionDashboard: View {
     }
 
     var body: some View {
-        ScrollView {
+        WeeklyReviewRecordScroll(target: reviewRecordID) {
             VStack(spacing: 16) {
                 HStack(spacing: 12) {
                     StatTile(value: "\(store.shortActions.filter { !$0.isCompleted }.count)", label: "待完成", symbol: "circle.dashed", color: RhythmTheme.blue)
@@ -321,6 +328,16 @@ struct ShortActionDashboard: View {
                     .buttonStyle(.borderedProminent)
                 }
 
+                if let reviewRecordID, !displayed.contains(where: { $0.id == reviewRecordID }) {
+                    if store.shortActions.contains(where: { $0.id == reviewRecordID }) {
+                        Button(weeklyReviewText("清除筛选以查看原行动", "Clear Filter to Show the Original Action")) {
+                            goalFilter = nil
+                        }
+                        .id(reviewRecordID)
+                    } else {
+                        WeeklyReviewMissingRecord().id(reviewRecordID)
+                    }
+                }
                 if displayed.isEmpty {
                     EmptyStateView(symbol: "list.bullet.clipboard", title: "没有匹配的短期行动", message: "把长期目标拆成下一步可以明确完成的行动，并在专注时关联它。", actionTitle: "新建短期行动") {
                         editorRoute = .create()
@@ -333,6 +350,8 @@ struct ShortActionDashboard: View {
                             } delete: {
                                 deleteCandidate = action
                             }
+                            .weeklyReviewHighlight(action.id == reviewRecordID)
+                            .id(action.id)
                         }
                     }
                 }

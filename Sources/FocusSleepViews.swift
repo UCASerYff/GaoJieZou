@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FocusDashboard: View {
     @EnvironmentObject private var store: RhythmStore
+    var reviewRecordID: String? = nil
     @State private var selectedActionID: String?
     @State private var confirmCancel = false
 
@@ -12,7 +13,8 @@ struct FocusDashboard: View {
     }
 
     var body: some View {
-        ScrollView {
+        let history = weeklyReviewVisibleRecords(store.focusRecords, limit: 30, target: reviewRecordID)
+        WeeklyReviewRecordScroll(target: reviewRecordID) {
             VStack(spacing: 18) {
                 if store.activeFocus != nil {
                     activeFocusPanel
@@ -29,13 +31,16 @@ struct FocusDashboard: View {
                         Text(RhythmLocalization.format("共 %d 次", store.focusRecords.count))
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    if let reviewRecordID, !history.contains(where: { $0.id == reviewRecordID }) {
+                        WeeklyReviewMissingRecord().id(reviewRecordID)
+                    }
                     if store.focusRecords.isEmpty {
                         Text(RhythmLocalization.text("完成第一次专注后，记录会出现在这里。"))
                             .font(.callout)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, minHeight: 100, alignment: .center)
                     } else {
-                        ForEach(store.focusRecords.prefix(30)) { record in
+                        ForEach(history) { record in
                             HStack(spacing: 12) {
                                 Image(systemName: "timer")
                                     .foregroundStyle(RhythmTheme.blue)
@@ -56,6 +61,8 @@ struct FocusDashboard: View {
                                 }
                             }
                             .padding(.vertical, 4)
+                            .weeklyReviewHighlight(record.id == reviewRecordID)
+                            .id(record.id)
                         }
                     }
                 }
@@ -232,6 +239,7 @@ private enum SleepSheetRoute: Identifiable, Equatable {
 struct SleepDashboard: View {
     @EnvironmentObject private var store: RhythmStore
     @EnvironmentObject private var settings: RhythmSettings
+    var reviewRecordID: String? = nil
     @State private var proposedStart = Date()
     @State private var proposedStartIsCustom = false
     @State private var confirmCancel = false
@@ -239,7 +247,8 @@ struct SleepDashboard: View {
     @State private var showingTimerEntry = false
 
     var body: some View {
-        ScrollView {
+        let history = weeklyReviewVisibleRecords(store.sleepRecords, limit: 100, target: reviewRecordID)
+        WeeklyReviewRecordScroll(target: reviewRecordID) {
             VStack(spacing: 18) {
                 if store.activeSleep != nil {
                     activeSleepPanel
@@ -270,14 +279,17 @@ struct SleepDashboard: View {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.caption).foregroundStyle(RhythmTheme.orange)
                     }
+                    if let reviewRecordID, !history.contains(where: { $0.id == reviewRecordID }) {
+                        WeeklyReviewMissingRecord().id(reviewRecordID)
+                    }
                     if store.sleepRecords.isEmpty {
                         Text(RhythmLocalization.text("完成第一次睡眠计时后，记录会出现在这里。"))
                             .font(.callout).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, minHeight: 100, alignment: .center)
                     } else {
-                        // store.apply 已按 endedAt 倒序排列（与本视图原排序方向一致），直接取前 100 条。
+                        // 保留常规最近 100 条，同时允许复盘定位这 100 条以外的一条记录。
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(store.sleepRecords.prefix(100)) { record in
+                            ForEach(history) { record in
                             HStack(spacing: 12) {
                                 Image(systemName: "moon.stars.fill")
                                     .foregroundStyle(RhythmTheme.purple)
@@ -309,10 +321,14 @@ struct SleepDashboard: View {
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                             .padding(.vertical, 4)
+                            .weeklyReviewHighlight(record.id == reviewRecordID)
+                            .id(record.id)
                             }
                         }
                         if store.sleepRecords.count > 100 {
-                            Text(RhythmLocalization.format("仅显示最近 100 条，共 %d 条", store.sleepRecords.count))
+                            Text(history.count > 100
+                                 ? weeklyReviewText("显示最近 100 条及这次定位的往期记录。", "Showing the latest 100 and the requested older record.")
+                                 : RhythmLocalization.format("仅显示最近 100 条，共 %d 条", store.sleepRecords.count))
                                 .font(.caption)
                                 .frame(maxWidth: .infinity, alignment: .center)
                                 .padding(.top, 4)

@@ -112,7 +112,8 @@ def contract_violations(host, resident):
     counter, _, _ = swift_block(delegate, r'\bfunc\s+nextIntegratedRouteRevision\s*\(')
     show, _, _ = swift_block(main, r'\bfunc\s+showMainWindow\s*\(')
     reopen, _, _ = swift_block(delegate, r'\bfunc\s+applicationShouldHandleReopen\s*\(')
-    menu, _, _ = swift_block(resident, r'\bstruct\s+ResidentMenuContent\s*:\s*View\b')
+    launch, _, _ = swift_block(delegate, r'\bfunc\s+applicationDidFinishLaunching\s*\(')
+    menu_show, _, _ = swift_block(resident, r'\bfunc\s+showMainWindowFromMenu\s*\(')
     _, receiving_code = swift_masks(receiver)
     _, main_code = swift_masks(main)
     _, host_code = swift_masks(host)
@@ -146,15 +147,18 @@ def contract_violations(host, resident):
     # Manual menu/Dock/resident presentation is intentionally independent of URL reception.
     scene_comments, _ = swift_masks(scene)
     show_comments, _ = swift_masks(show)
-    menu_comments, _ = swift_masks(menu)
+    launch_comments, _ = swift_masks(launch)
+    _, menu_code = swift_masks(menu_show)
     if not re.search(r'delegate\.showMainWindow\?\s*\(\s*\)', scene_comments):
         errors.add('command-menu-show-entry-missing')
     if not (re.search(r'openWindow\s*\(\s*id:\s*"main"\s*,\s*value:\s*"main"\s*\)', show_comments)
             and re.search(r'delegate\.showMainWindow\s*=\s*showMainWindow', main_code)
+            and re.search(r'StandaloneApp\.activate\s*\(\s*\)', show_comments)
             and re.search(r'\bshowMainWindow\?\s*\(\s*\)', reopen)):
         errors.add('manual-or-dock-show-entry-missing')
-    if not (re.search(r'openWindow\s*\(\s*id:\s*"main"\s*,\s*value:\s*"main"\s*\)', menu_comments)
-            and re.search(r'StandaloneApp\.activate\s*\(\s*\)', menu_comments)):
+    if not (re.search(r'resident\.start\s*\{\s*\[weak self\]\s*in\s*self\?\.showMainWindow\?\s*\(\s*\)\s*\}',
+                      launch_comments)
+            and re.search(r'\bshowMainWindow\?\s*\(\s*\)', menu_code)):
         errors.add('resident-show-entry-missing')
     return errors
 
@@ -162,8 +166,8 @@ def contract_violations(host, resident):
 class HostExternalEventContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.host = (REPO / 'Host/AppMain.swift').read_text()
-        cls.resident = (REPO / 'Host/ResidentAppController.swift').read_text()
+        cls.host = (REPO / 'Host/AppMain.swift').read_text(encoding='utf-8')
+        cls.resident = (REPO / 'Host/ResidentAppController.swift').read_text(encoding='utf-8')
 
     def test_production_scene_reuse_contract(self):
         self.assertEqual(contract_violations(self.host, self.resident), set())
@@ -199,6 +203,10 @@ class HostExternalEventContractTests(unittest.TestCase):
         _, _, end = swift_block(self.host, r'\.onOpenURL\b')
         mutated = self.host[:end] + '\n delegate.integratedRouteRevision = 0\n' + self.host[end:]
         self.assertIn('process-route-counter-reset-or-missing', contract_violations(mutated, self.resident))
+
+    def test_resident_show_must_dispatch_the_registered_window_action(self):
+        mutated = self.resident.replace('showMainWindow?()', 'NSApp.activate(ignoringOtherApps: true)')
+        self.assertIn('resident-show-entry-missing', contract_violations(self.host, mutated))
 
 
 if __name__ == '__main__':

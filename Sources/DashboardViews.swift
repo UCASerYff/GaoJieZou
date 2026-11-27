@@ -16,8 +16,11 @@ struct TodayDashboard: View {
     @EnvironmentObject private var store: RhythmStore
     @EnvironmentObject private var settings: RhythmSettings
     @Binding var selection: RhythmSection
+    var openReviewDestination: (WeeklyReviewDestination) -> Void
     @State private var monthOffset = 0
     @State private var showingSleepEditor = false
+    @State private var showingWeeklyReview = false
+    @State private var pendingReviewDestination: WeeklyReviewDestination?
 
     private var todayHabits: [Habit] { store.habits(for: Date(), unfinishedFirst: true) }
     private var completedHabits: Int { todayHabits.filter { store.isHabitCompleted($0) }.count }
@@ -109,6 +112,20 @@ struct TodayDashboard: View {
                 .environmentObject(store)
                 .environmentObject(settings)
         }
+        .sheet(isPresented: $showingWeeklyReview, onDismiss: finishReviewNavigation) {
+            WeeklyReviewView { destination in
+                pendingReviewDestination = destination
+                showingWeeklyReview = false
+            }
+            .environmentObject(store)
+            .environmentObject(settings)
+        }
+    }
+
+    private func finishReviewNavigation() {
+        guard let destination = pendingReviewDestination else { return }
+        pendingReviewDestination = nil
+        openReviewDestination(destination)
     }
 
     private var morningIntroduction: some View {
@@ -121,6 +138,13 @@ struct TodayDashboard: View {
                     .font(.system(size: 30, weight: .semibold, design: .serif))
             }
             Spacer()
+            Button {
+                showingWeeklyReview = true
+            } label: {
+                Label(weeklyReviewText("每周复盘", "Weekly Review"), systemImage: "chart.bar.xaxis")
+            }
+            .buttonStyle(.bordered)
+            .accessibilityIdentifier("rhythm.weeklyReview.open")
         }
         .padding(.top, 18)
         .padding(.horizontal, 2)
@@ -384,6 +408,7 @@ struct TodayDashboard: View {
 
 struct HabitDashboard: View {
     @EnvironmentObject private var store: RhythmStore
+    var reviewLocation: WeeklyReviewHabitLocation? = nil
     @State private var sheetRoute: HabitSheetRoute?
     @State private var deleteCandidate: Habit?
 
@@ -412,8 +437,11 @@ struct HabitDashboard: View {
     }
 
     var body: some View {
-        ScrollView {
+        WeeklyReviewRecordScroll(target: reviewLocation?.id) {
             VStack(spacing: 16) {
+                if let reviewLocation {
+                    reviewCheckIn(reviewLocation).id(reviewLocation.id)
+                }
                 habitHero
 
                 HStack {
@@ -496,6 +524,27 @@ struct HabitDashboard: View {
         } message: {
             Text(RhythmLocalization.text("已经获得的金币不会被扣除。"))
         }
+    }
+
+    private func reviewCheckIn(_ location: WeeklyReviewHabitLocation) -> some View {
+        let recordExists = store.habitCompletionKeys.contains(location.completionKey)
+        let habit = store.habits.first { $0.id.caseInsensitiveCompare(location.id) == .orderedSame }
+        return VStack(alignment: .leading, spacing: 8) {
+            Label(weeklyReviewText("打卡完成记录", "Habit Check-in"), systemImage: "checkmark.circle")
+                .font(.headline)
+            Text(weeklyReviewFullDate(location.date)).font(.callout).foregroundStyle(.secondary)
+            if recordExists {
+                LabeledContent(RhythmLocalization.text("已打卡")) {
+                    Text(habit?.title ?? RhythmLocalization.text("已删除打卡"))
+                }
+            } else {
+                WeeklyReviewMissingRecord()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(RhythmTheme.panel, in: RoundedRectangle(cornerRadius: 12))
+        .weeklyReviewHighlight(true)
     }
 
     private var habitHero: some View {

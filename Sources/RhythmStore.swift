@@ -938,7 +938,7 @@ final class RhythmStore: ObservableObject {
         status: GoalStatus
     ) {
         let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleanTitle.isEmpty else { return }
+        guard !loadFailed, !cleanTitle.isEmpty else { return }
         if let existingID, let index = longGoals.firstIndex(where: { $0.id == existingID }) {
             longGoals[index].title = cleanTitle
             longGoals[index].reason = reason
@@ -948,13 +948,10 @@ final class RhythmStore: ObservableObject {
             longGoals[index].unit = unit
             longGoals[index].startDate = startDate
             longGoals[index].targetDate = max(startDate, targetDate)
-            let oldStatus = longGoals[index].status
-            longGoals[index].status = status
-            if status == .completed && oldStatus != .completed {
-                claimGoalReward(at: index)
-            }
+            if updateGoalStatus(at: index, status: status) { claimGoalReward(at: index) }
         } else {
-            var goal = LongGoal(
+            let now = Date()
+            let goal = LongGoal(
                 id: UUID().uuidString,
                 title: cleanTitle,
                 reason: reason,
@@ -966,24 +963,35 @@ final class RhythmStore: ObservableObject {
                 targetDate: max(startDate, targetDate),
                 status: status,
                 rewardClaimed: false,
-                createdAt: Date()
+                createdAt: now,
+                completedAt: status == .completed ? now : nil
             )
             longGoals.append(goal)
-            if status == .completed, let index = longGoals.firstIndex(where: { $0.id == goal.id }) {
-                claimGoalReward(at: index)
-                goal = longGoals[index]
-            }
+            if status == .completed { claimGoalReward(at: longGoals.count - 1) }
         }
         widgetDirty = true
         save()
     }
 
     func setGoalStatus(_ goal: LongGoal, status: GoalStatus) {
-        guard let index = longGoals.firstIndex(where: { $0.id == goal.id }) else { return }
-        longGoals[index].status = status
+        guard !loadFailed, let index = longGoals.firstIndex(where: { $0.id == goal.id }) else { return }
+        updateGoalStatus(at: index, status: status)
         if status == .completed { claimGoalReward(at: index) }
         widgetDirty = true
         save()
+    }
+
+    @discardableResult
+    private func updateGoalStatus(at index: Int, status: GoalStatus) -> Bool {
+        let previous = longGoals[index].status
+        let newlyCompleted = status == .completed && previous != .completed
+        longGoals[index].status = status
+        if status != .completed {
+            longGoals[index].completedAt = nil
+        } else if newlyCompleted {
+            longGoals[index].completedAt = Date()
+        }
+        return newlyCompleted
     }
 
     private func claimGoalReward(at index: Int) {

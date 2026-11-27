@@ -35,13 +35,19 @@ enum RhythmBundle {
         ).publishCurrentLibrary()
     }
 
+    public static var usesEnglish: Bool { GQNSLanguage.isEnglish }
+
     public static func backgroundSnapshot() -> RhythmBackgroundSnapshot {
         let store = RhythmRuntime.store
         if store.loadFailed { return .init(phase: .dataUnavailable, elapsedSeconds: 0) }
         if let focus = store.activeFocus {
             let phase: RhythmBackgroundSnapshot.Phase = focus.segmentStartedAt != nil
                 ? .focusing : (focus.pausedForSystem ? .systemPaused : .paused)
-            return .init(phase: phase, elapsedSeconds: store.focusElapsed())
+            let estimatedMinutes = focus.linkedActionID.flatMap { id in
+                store.shortActions.first { $0.id == id }?.estimatedMinutes
+            }
+            let targetMinutes = estimatedMinutes.flatMap { $0 > 0 ? $0 : nil }
+            return .init(phase: phase, elapsedSeconds: store.focusElapsed(), focusTargetMinutes: targetMinutes)
         }
         if store.activeSleep != nil { return .init(phase: .sleeping, elapsedSeconds: store.sleepElapsed()) }
         return .init(phase: .idle, elapsedSeconds: 0)
@@ -64,6 +70,13 @@ public struct RhythmBackgroundSnapshot {
     public enum Phase: String { case idle, focusing, paused, systemPaused, sleeping, dataUnavailable }
     public let phase: Phase
     public let elapsedSeconds: TimeInterval
+    public let focusTargetMinutes: Int?
+
+    init(phase: Phase, elapsedSeconds: TimeInterval, focusTargetMinutes: Int? = nil) {
+        self.phase = phase
+        self.elapsedSeconds = elapsedSeconds
+        self.focusTargetMinutes = focusTargetMinutes
+    }
 }
 
 public struct RhythmModuleView: View {

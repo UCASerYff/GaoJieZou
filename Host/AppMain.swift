@@ -8,7 +8,6 @@ import RhythmFootprints
 
 @main struct StandaloneApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @State private var menuBarInserted = true
 
     init() {
         AppAppearance.current.apply()
@@ -37,13 +36,6 @@ import RhythmFootprints
             }
 
         }
-        // The binding keeps removing the item from implicitly terminating this app.
-        MenuBarExtra(isInserted: $menuBarInserted) {
-            ResidentMenuContent(controller: delegate.resident)
-        } label: {
-            ResidentMenuLabel(controller: delegate.resident)
-        }
-        .menuBarExtraStyle(.menu)
         Settings {
             TabView {
                 RhythmSettingsView().tabItem { Label("模块设置", systemImage: "slider.horizontal.3") }
@@ -180,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         lifecycleLog.launch()
         lifecycleLog.record("automatic_termination.disabled")
         UNUserNotificationCenter.current().delegate = self
-        resident.start()
+        resident.start { [weak self] in self?.showMainWindow?() }
         DispatchQueue.main.async { RhythmApplicationLifecycle.warmup() }
         windowObserver = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: .main) { [weak self] note in
             guard let window = note.object as? NSWindow,

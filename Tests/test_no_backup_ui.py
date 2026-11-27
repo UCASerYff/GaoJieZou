@@ -70,8 +70,8 @@ for token in ("rollback", "ARCHIVE", "RECEIPT", "VERIFIED", "upgrade_data.py sna
         violations.append(f"scripts/install.sh: {token}")
 
 info = plistlib.loads((ROOT / "Info.plist").read_bytes())
-if info.get("CFBundleShortVersionString") != "4.12" or info.get("CFBundleVersion") != "13":
-    violations.append("Info.plist: expected version 4.12 build 13")
+if info.get("CFBundleShortVersionString") != "4.12" or info.get("CFBundleVersion") != "14":
+    violations.append("Info.plist: expected version 4.12 build 14")
 for key in ("CFBundleDocumentTypes", "UTExportedTypeDeclarations"):
     if "backup" in str(info.get(key, [])).lower() or "备份" in str(info.get(key, [])):
         violations.append(f"Info.plist: backup declaration remains in {key}")
@@ -80,4 +80,4 @@ if violations:
     print("FAIL: backup, restore, or rollback entry remains")
     print("\n".join(violations))
     raise SystemExit(1)
-print("PASS: no backup, restore, or rollback entry; version is 4.12 build 13")
+print("PASS: no backup, restore, or rollback entry; version is 4.12 build 14")

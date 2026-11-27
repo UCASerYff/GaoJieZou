@@ -2,8 +2,16 @@
 set -euo pipefail
 ROOT=${0:A:h:h}
 python3 "$ROOT/scripts/require_build_lease.py"
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-BUILD="$ROOT/build.noindex"
+verify_unsigned=0
+if [[ "${1:-}" == --verify-unsigned ]]; then
+    shift
+    verify_unsigned=1
+    export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+    BUILD="$ROOT/build.verify.noindex"
+else
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+    BUILD="$ROOT/build.noindex"
+fi
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 MACROS="$DEVELOPER_DIR/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib"
 mkdir -p "$BUILD/cache"
@@ -43,5 +51,7 @@ PY
     ln -s "Versions/Current/$NAME" "$FRAMEWORK/$NAME"
     ln -s Versions/Current/Modules "$FRAMEWORK/Modules"
     ln -s Versions/Current/Resources "$FRAMEWORK/Resources"
-    codesign --force --sign - "$FRAMEWORK"
+    if (( ! verify_unsigned )); then
+        codesign --force --sign - "$FRAMEWORK"
+    fi
 done

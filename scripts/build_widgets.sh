@@ -2,8 +2,13 @@
 set -euo pipefail
 ROOT=${0:A:h:h}
 python3 "$ROOT/scripts/require_build_lease.py"
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-BUILD="$ROOT/build.noindex"
+if [[ "${1:-}" == --verify-unsigned ]]; then
+    export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+    BUILD="$ROOT/build.verify.noindex"
+else
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+    BUILD="$ROOT/build.noindex"
+fi
 mkdir -p "$BUILD/PlugIns" "$BUILD/widget-cache"
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$ROOT/Info.plist")
 NUMBER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$ROOT/Info.plist")

@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -euo pipefail
 ROOT=${0:A:h:h}
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
 TEST_BUILD=$(mktemp -d "${TMPDIR:-/tmp/}rhythm-workspace-build.XXXXXX")
 trap 'rm -rf "$TEST_BUILD"' EXIT
 SDK=$(xcrun --sdk macosx --show-sdk-path)

@@ -2,15 +2,23 @@
 set -euo pipefail
 ROOT=${0:A:h:h}
 python3 "$ROOT/scripts/require_build_lease.py"
-export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
-BUILD="$ROOT/build.noindex"
+build_variant=()
+if [[ "${1:-}" == --verify-unsigned ]]; then
+    [[ $# == 1 ]] || { echo 'Expected only --verify-unsigned'; exit 2; }
+    build_variant=(--verify-unsigned)
+    export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+    BUILD="$ROOT/build.verify.noindex"
+else
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+    BUILD="$ROOT/build.noindex"
+fi
 APP="$BUILD/搞节奏.app"
 SIGNING_IDENTITY=${GAO_SIGNING_IDENTITY:-A15B2B2D22B018CBC842063C9A8A589946647524}
 [[ -d "$DEVELOPER_DIR" ]] || { echo '需要完整 Xcode';exit 1; }
 mkdir -p "$BUILD/cache" "$BUILD/icon.iconset"
 if [[ "${1:-}" != "--skip-frameworks" ]]; then
-    "$ROOT/scripts/build_framework.sh" > "$BUILD/framework-build.log" 2>&1 || { tail -60 "$BUILD/framework-build.log";exit 1;}
-    "$ROOT/scripts/build_widgets.sh" > "$BUILD/widget-build.log" 2>&1 || { tail -60 "$BUILD/widget-build.log";exit 1;}
+    "$ROOT/scripts/build_framework.sh" "${build_variant[@]}" > "$BUILD/framework-build.log" 2>&1 || { tail -60 "$BUILD/framework-build.log";exit 1;}
+    "$ROOT/scripts/build_widgets.sh" "${build_variant[@]}" > "$BUILD/widget-build.log" 2>&1 || { tail -60 "$BUILD/widget-build.log";exit 1;}
 fi
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks" "$APP/Contents/PlugIns"
@@ -28,15 +36,25 @@ cp "$ROOT/Resources/GaoJieZouIcon.png" "$APP/Contents/Resources/"
 ditto "$BUILD/Frameworks/Rhythm.framework" "$APP/Contents/Frameworks/Rhythm.framework"
 for module in RhythmHealth RhythmFootprints; do
     ditto "$BUILD/Frameworks/$module.framework" "$APP/Contents/Frameworks/$module.framework"
+done
+ditto "$BUILD/PlugIns/GaoJieZouWidgets.appex" "$APP/Contents/PlugIns/GaoJieZouWidgets.appex"
+for source in Health Footprints; do
+    name="Rhythm${source}Widgets"
+    ditto "$BUILD/PlugIns/$name.appex" "$APP/Contents/PlugIns/$name.appex"
+done
+
+if [[ "${1:-}" == --verify-unsigned ]]; then
+    echo "Built verification bundle: $APP"
+    exit 0
+fi
+for module in RhythmHealth RhythmFootprints; do
     codesign --force --sign "$SIGNING_IDENTITY" "$APP/Contents/Frameworks/$module.framework"
 done
 for helper in "$APP"/Contents/Frameworks/Rhythm.framework/Versions/A/Resources/UsageEngine/tokscale(N); do codesign --force --sign "$SIGNING_IDENTITY" --options runtime "$helper"; done
 codesign --force --sign "$SIGNING_IDENTITY" "$APP/Contents/Frameworks/Rhythm.framework"
-ditto "$BUILD/PlugIns/GaoJieZouWidgets.appex" "$APP/Contents/PlugIns/GaoJieZouWidgets.appex"
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Widget.entitlements" "$APP/Contents/PlugIns/GaoJieZouWidgets.appex"
 for source in Health Footprints; do
     name="Rhythm${source}Widgets"
-    ditto "$BUILD/PlugIns/$name.appex" "$APP/Contents/PlugIns/$name.appex"
     codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/Integrated/$source/Widgets/Widget.entitlements" "$APP/Contents/PlugIns/$name.appex"
 done
 codesign --force --sign "$SIGNING_IDENTITY" --entitlements "$ROOT/App.entitlements" "$APP"

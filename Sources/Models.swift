@@ -357,6 +357,8 @@ struct LongGoal: Codable, Identifiable, Hashable {
     var status: GoalStatus
     var rewardClaimed: Bool
     var createdAt: Date
+    /// 老目标没有完成日期，只有实际标记完成时才记录。
+    var completedAt: Date? = nil
 }
 
 struct ShortAction: Codable, Identifiable, Hashable {

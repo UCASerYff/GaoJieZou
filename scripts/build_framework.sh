@@ -2,18 +2,24 @@
 set -euo pipefail
 ROOT=${0:A:h:h}
 python3 "$ROOT/scripts/require_build_lease.py"
-XCODE=/Applications/Xcode.app
-if [[ ! -d "$XCODE/Contents/Developer" ]]; then
-    echo "error: 未找到 Xcode（$XCODE）。构建需要完整 Xcode 工具链（SwiftUI 宏插件只随 Xcode 分发），" >&2
+build_variant=()
+if [[ "${1:-}" == --verify-unsigned ]]; then
+    build_variant=(--verify-unsigned)
+    export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"
+    BUILD="$ROOT/build.verify.noindex"
+else
+    export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+    BUILD="$ROOT/build.noindex"
+fi
+if [[ ! -d "$DEVELOPER_DIR" ]]; then
+    echo "error: 未找到 Xcode（$DEVELOPER_DIR）。构建需要完整 Xcode 工具链（SwiftUI 宏插件只随 Xcode 分发），" >&2
     echo "       请安装 Xcode 后重试；仅用 Command Line Tools 无法构建。" >&2
     exit 1
 fi
-export DEVELOPER_DIR="$XCODE/Contents/Developer"
-"$ROOT/scripts/build_integrated_frameworks.sh"
+"$ROOT/scripts/build_integrated_frameworks.sh" "${build_variant[@]}"
 NAME=Rhythm
 SOURCE="$ROOT"
 [[ -d "$SOURCE/Sources" && -f "$SOURCE/Module.swift" ]] || { echo "Unknown module: $NAME" >&2; exit 1; }
-BUILD="$ROOT/build.noindex"
 FRAMEWORK="$BUILD/Frameworks/$NAME.framework"
 VERSION="$FRAMEWORK/Versions/A"
 rm -rf "$FRAMEWORK"
@@ -50,5 +56,7 @@ ln -s A "$FRAMEWORK/Versions/Current"
 ln -s Versions/Current/$NAME "$FRAMEWORK/$NAME"
 ln -s Versions/Current/Modules "$FRAMEWORK/Modules"
 ln -s Versions/Current/Resources "$FRAMEWORK/Resources"
-codesign --force --sign - "$FRAMEWORK"
+if [[ "${1:-}" != --verify-unsigned ]]; then
+    codesign --force --sign - "$FRAMEWORK"
+fi
 echo "Built $FRAMEWORK"

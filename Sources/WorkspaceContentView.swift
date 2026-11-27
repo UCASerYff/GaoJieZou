@@ -7,6 +7,7 @@ struct ContentView: View {
     var route: URL? = nil
     var routeRevision: Int = 0
     @State private var handledRouteRevision = 0
+    @State private var reviewDestination: WeeklyReviewDestination?
     @EnvironmentObject private var store: RhythmStore
     @EnvironmentObject private var settings: RhythmSettings
     @Environment(\.colorScheme) private var colorScheme
@@ -44,6 +45,9 @@ struct ContentView: View {
             if selection.workspace == .playground { showingPlaygroundIndex = true }
         }
         .onChange(of: settings.language) { _ in updateWindowTitle() }
+        .onChange(of: selection) { _, next in
+            if reviewDestination?.section != next { reviewDestination = nil }
+        }
         .onReceive(NotificationCenter.default.publisher(for: Notification.Name("GaoSeries.health.sleepReward"))) { note in
             let energy = note.userInfo?["energy"] as? Double ?? 0
             store.notice = energy > 0
@@ -120,6 +124,11 @@ struct ContentView: View {
         if selection.workspace == .playground { showingPlaygroundIndex = false }
     }
 
+    private func openReviewDestination(_ destination: WeeklyReviewDestination) {
+        reviewDestination = destination
+        selectRecord(destination.section)
+    }
+
     @ViewBuilder
     private var detail: some View {
         if selection.workspace == .playground && showingPlaygroundIndex {
@@ -127,21 +136,21 @@ struct ContentView: View {
         } else {
             switch selection {
             case .today:
-                TodayDashboard(selection: $selection)
+                TodayDashboard(selection: $selection, openReviewDestination: openReviewDestination)
             case .habits:
-                HabitDashboard()
+                HabitDashboard(reviewLocation: reviewDestination?.habitLocation)
             case .chores:
                 ChoreDashboard()
             case .focus:
-                FocusDashboard()
+                FocusDashboard(reviewRecordID: reviewDestination?.recordID(for: .focus))
             case .sleep:
-                SleepDashboard()
+                SleepDashboard(reviewRecordID: reviewDestination?.recordID(for: .sleep))
             case .statistics:
                 StatisticsDashboard()
             case .longGoals:
-                LongGoalDashboard()
+                LongGoalDashboard(reviewRecordID: reviewDestination?.recordID(for: .longGoals))
             case .shortActions:
-                ShortActionDashboard()
+                ShortActionDashboard(reviewRecordID: reviewDestination?.recordID(for: .shortActions))
             case .farm:
                 FarmGameView()
             case .pasture:
