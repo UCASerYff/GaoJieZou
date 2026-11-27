@@ -529,14 +529,14 @@
 
   function drawPin(ctx, x, y, city, color, opts = {}) {
     const highlight = city.id === ui.selected;
-    const radius = opts.home ? 6 : highlight ? 5 : 3.8;
+    const radius = opts.home ? 6 : opts.compact ? 2.1 : highlight ? 5 : 3.8;
     ctx.save();
     ctx.beginPath();
     ctx.arc(x, y, radius, 0, 2 * Math.PI);
     ctx.fillStyle = opts.home ? color.green : color.dot;
     if (opts.outline) ctx.strokeStyle = color.dot;
     else ctx.fill();
-    ctx.lineWidth = 1.3;
+    ctx.lineWidth = opts.compact ? 0.9 : 1.3;
     if (!opts.outline) ctx.strokeStyle = color.sheet;
     ctx.stroke();
     if (opts.home) {
@@ -680,11 +680,12 @@
     if (!journey && home) pins.unshift({ city: home, opts: { home: true } });
     const mainPins = [];
     const layout = { width, height, bounds: [] };
+    const outlinedCities = output ? new Set(cityLayer?.regions.map(region => region.id)) : null;
     if (!output) layout.bounds.push([15, 32, 185], [15, 46, 185]);
     for (const { city, opts } of pins) {
       if (scope === "china" && (city.countryID !== "CHN" || city.latitude < 17.8)) continue;
       const [x, y] = toPixel(project(city.longitude, city.latitude, scope), transform);
-      drawPin(ctx, x, y, city, palette, { ...opts, label: labels, layout });
+      drawPin(ctx, x, y, city, palette, { ...opts, compact: !opts.home && outlinedCities?.has(city.id), label: labels, layout });
       mainPins.push({ city, x, y });
     }
     let inset;
@@ -711,7 +712,8 @@
       for (const { city, opts } of pins) {
         if (city.countryID !== "CHN" || city.latitude >= 17.8) continue;
         const [px, py] = toPixel(project(city.longitude, city.latitude, scope), local);
-        drawPin(ctx, px, py, city, palette, opts);
+        const compact = output && !opts.home && ui.atlas.southCities.regions.some(region => region.id === city.id);
+        drawPin(ctx, px, py, city, palette, { ...opts, compact });
         if (px >= x && px <= x + insetWidth && py >= y && py <= y + h) mainPins.push({ city, x: px, y: py });
       }
       ctx.fillStyle = palette.label;

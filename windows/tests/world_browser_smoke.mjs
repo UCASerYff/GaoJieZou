@@ -73,6 +73,8 @@ const fixture=[
   "places=[search_cities(query)[0] for query in ('beijing','shanghai')]",
   "for city in places:",
   "    r.footprints.save_visit({'cityID':city['id'],'note':'synthetic world fixture'},r.now())",
+  "wuhan=next(city for city in search_cities('wuhan') if city['id']=='cn-420100')",
+  "r.footprints.save_visit({'cityID':wuhan['id'],'date':{'precision':'year','year':2002}},r.now())",
   "r.footprints.set_resident(places[0]['id'],r.now())",
   "r.footprints.set_train_route(places[1]['id'],r.now())",
   "r.footprints.upgrade_carriage('sleeper')",
@@ -145,6 +147,24 @@ try {
   await cdp("Page.navigate",{url:base+"/"});
   await until("window.Gao?.state?.status==='ready'");
 
+  await js("Gao.go('footprints','map')");
+  await until("document.querySelector('#fp-atlas')?.width > 300");
+  await js("const year=document.querySelector('#fp-map-year');year.value='2002';year.dispatchEvent(new Event('change'));");
+  await js("const query=document.querySelector('#fp-map-search');query.value='wuhan';query.dispatchEvent(new Event('input',{bubbles:true}));");
+  await until("!!document.querySelector('[data-fp-choose=cn-420100]')");
+  await click('[data-fp-choose="cn-420100"]');
+  await click('[data-fp-action="export"]');
+  await until("document.querySelector('#fp-export-map')?.width===2280");
+  const ochrePixels=await js([
+    "const canvas=document.querySelector('#fp-export-map');",
+    "const bytes=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;",
+    "const hex=getComputedStyle(canvas).getPropertyValue('--fp-map-visited').trim();",
+    "const [r,g,b]=[1,3,5].map(i=>parseInt(hex.slice(i,i+2),16));",
+    "let matching=0;for(let i=0;i<bytes.length;i+=4)if(bytes[i]===r&&bytes[i+1]===g&&bytes[i+2]===b)matching++;matching;"
+  ].join(""));
+  assert(ochrePixels>40,"The exported visit pin obscured Wuhan's prefecture fill.");
+  await click("#editor [data-close]");
+
   await go("farm");await modeReady("farm");
   let point=await planePoint("farm",-4.24,0,-4.90);
   await mouse("mousePressed",...point);await mouse("mouseReleased",...point);
@@ -198,7 +218,7 @@ try {
   assert.equal(await js("!!document.querySelector('.gao-world-canvas')"),false,"3D fallback was not exercised.");
   assert.deepEqual(errors,[]);
   await js('Gao.api("/api/shutdown",{})');
-  console.log("WebGL farm, pasture, fishing, aquarium, island, train, interiors and fallback passed.");
+  console.log("Offline map export and WebGL farm, pasture, fishing, aquarium, island, train, interiors and fallback passed.");
 } finally {
   await cleanup();
 }

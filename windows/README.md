@@ -34,7 +34,7 @@
 
 共同睡眠遵循单一 SQLite 权威、一次性历史迁移、近似去重和删除墓碑。健康与节奏从各自界面写入同一个存档。牧场和小岛分别按本地结算凭据防止重复发奖。Windows 支持本机刷新，macOS App Group 和 Darwin 通知属于各自宿主。
 
-地图使用离线城市坐标、Natural Earth 世界轮廓和 CTAmap 中国行政轮廓。省级和 370 个收藏城市按原有编号匹配，支持边界点选及高分辨率离线地图 PNG 导出。资源与许可见 [Windows 第三方说明](src/gaojiezou/assets/THIRD_PARTY_NOTICES.txt)。HEIC 原件可下载，本机具备相应的 Windows Imaging Component 解码器时可在应用内预览。
+地图使用离线城市坐标、Natural Earth 世界轮廓和 CTAmap 中国行政轮廓。省级和 370 个收藏城市按原有编号匹配，支持边界点选及高分辨率离线地图 PNG 导出。资源与许可见 [Windows 第三方说明](src/gaojiezou/assets/THIRD_PARTY_NOTICES.txt)。已有 HEIC 原件可下载。Windows Imaging Component 具备相应解码器时可在应用内预览，新录入的 HEIC 照片按现有 JPEG 规则保存。
 
 农场、牧场、渔场、水族馆、荒岛和旅行列车使用 WebGL 场景与仓库原有画材。场景支持点选、相机操作、牧场排序、荒岛建筑摆放、鱼类巡游和列车车厢内部视图。WebGL 不可用时使用对应的二维图和业务控件。光照、透明排序和选中边界仍与 SceneKit 有差异。
 
