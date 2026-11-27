@@ -34,7 +34,7 @@ try {
     $versionLabel = Invoke-Python -c "import sys; sys.path.insert(0, 'src'); from gaojiezou.version import VERSION_LABEL; print(VERSION_LABEL)"
     $major, $minor, $build = $versionLabel -split '[.+]'
     $version = "$major.$minor"
-    $stage = Join-Path $repo "build.noindex\windows-$version"
+    $stage = Join-Path $repo "build.noindex\windows-$versionLabel"
     $frozen = Join-Path $stage "frozen"
     $macAssets = Join-Path $stage "mac-assets"
     New-Item -Path $frozen, $macAssets, $DistDirectory -ItemType Directory -Force | Out-Null
@@ -126,7 +126,7 @@ VSVersionInfo(
             --distpath $frozen --workpath $flavorStage --specpath $flavorStage launch.py
     }
 
-    $artifactName = "GaoJieZou-$version-Windows-x64.msi"
+    $artifactName = "GaoJieZou-$versionLabel-Windows-x64.msi"
     $stagedInstaller = Join-Path $stage $artifactName
     Invoke-Python installer.py --output $stagedInstaller --payload $frozen --icon $icon
     $installer = Join-Path $DistDirectory $artifactName

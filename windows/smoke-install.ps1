@@ -58,8 +58,13 @@ try {
     $gui = Join-Path $install "GaoJieZou.exe"
     $version = & $cli --version
     if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\+\d+$') { throw "Installed CLI version invalid." }
-    $filename = "GaoJieZou-" + ($version -split '\+')[0] + "-Windows-x64.msi"
-    if ((Split-Path -Leaf $msi) -ne $filename) { throw "MSI name and installed version disagree." }
+    $marketingVersion, $buildNumber = $version -split '\+'
+    $filename = "GaoJieZou-$version-Windows-x64.msi"
+    $legacyFilename = "GaoJieZou-$marketingVersion-Windows-x64.msi"
+    $leaf = Split-Path -Leaf $msi
+    if ($leaf -ne $filename -and -not ([int]$buildNumber -le 3 -and $leaf -eq $legacyFilename)) {
+        throw "MSI name and installed version disagree."
+    }
 
     if ($CheckShell) {
         $command = (Get-Item -LiteralPath "$protocol\shell\open\command").GetValue("")

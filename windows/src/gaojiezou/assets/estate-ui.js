@@ -36,26 +36,32 @@
   }
 
   function scene(image,chips,surface,tools,classes="") {
-    return '<div class="game-scene '+classes+'" data-estate-mode="'+classes.replace("-scene","")+'"><img src="' + asset(image) + '" alt="">' +
-      (chips ? '<div class="row scene-hud">' + chips + '</div>' : "") +
-      surface + (tools ? '<div class="row scene-toolbar">' + tools + "</div>" : "") + "</div>";
+    const mode = classes.replace("-scene","");
+    const titles = {farm:["农场","Farm"],pasture:["牧场","Pasture"],fishing:["渔场","Fishing"],aquarium:["水族馆","Aquarium"]};
+    return '<section class="game-stage">'+(immersive ? "" : header(t(...titles[mode]),"",
+      chips ? '<div class="row stage-stats">'+chips+"</div>" : ""))+
+      (tools ? '<div class="row game-controls" aria-label="'+L("场景操作","Scene actions")+'">'+tools+"</div>" : "")+
+      '<div class="game-scene '+classes+'" data-estate-mode="'+mode+'"><img src="' + asset(image) + '" alt="">' +
+      surface+"</div></section>";
   }
   function index() {
     const info = [
-      ["farm","农场","leaf","teal","在场景中播种、浇水、施肥，让专注推动作物生长",
-        lib().farmPlots.filter(row => row.cropID).length+t(" 块农田生长中"," planted plots")],
-      ["pasture","牧场","paw","clay","在场景中搭窝、饲养与收取，让规律睡眠带来产出",
-        lib().pastureAnimals.length+t(" 只牲畜"," animals")],
-      ["fishing","渔场","fish","teal","在湖边抛竿、管理鱼篓，并进入水族馆照料收藏",
-        Object.keys(lib().fishCaught).length+t(" 种鱼已发现"," fish species found")],
-      ["island","荒岛生活","tree","teal","照料小岛，管理活力与物资",t("活力、物资与小岛建设","Energy, supplies and island building")],
-      ["train","旅行列车","train","orange","规划列车线路，管理车厢与物资",t("线路、车厢与旅行物资","Routes, carriages and supplies")]
+      ["farm","农场","leaf","FarmGameSceneV15",lib().farmPlots.filter(row => row.cropID).length+t(" 块农田生长中"," planted plots")],
+      ["pasture","牧场","paw","PastureGameSceneV15",lib().pastureAnimals.length+t(" 只牲畜"," animals")],
+      ["fishing","渔场","fish","FishingGameSceneV15",Object.keys(lib().fishCaught).length+t(" 种鱼已发现"," fish species found")],
+      ["aquarium","水族馆","water","AquariumPanoramaV352",lib().aquariumFish.length+t(" 条鱼"," fish")],
+      ["island","荒岛生活","tree","IslandSceneArt",t("建造与物资","Buildings and supplies")],
+      ["train","旅行列车","train","",t("车厢与行程","Carriages and routes")]
     ];
-    return shell(header(t("乐园"),t("认真生活，也尽情生长。")) + '<div class="grid game-index">' +
-      info.map(([id,title,name,color,detail,status]) => '<button type="button" class="card game-entry" data-go="playground/' + id +
-        '"><span class="row">' + glyph(name,color) + icon("diagonal","muted") + '</span><h2>' + L(title) + '</h2><p class="muted">' +
-        L(detail) + '</p><span class="row"><strong class="' + color + ' small">' + esc(status) +
-        '</strong><span class="muted small">' + L("进入","Open") + "</span></span></button>").join("") + "</div>");
+    const totals = '<div class="row stage-stats">'+chip("coin",coins(lib().coins))+
+      chip("fish",lib().bait+t(" 个鱼饵"," bait"))+"</div>";
+    return shell(header(t("乐园"),"",totals) + '<div class="grid game-index">' +
+      info.map(([id,title,name,image,status]) => '<button type="button" class="card game-entry"'+
+        (id==="aquarium"?' data-action="estate:open-aquarium"':' data-go="playground/'+id+'"')+'>'+
+        (image ? '<img class="game-entry-art" src="'+asset(image)+'" alt="">' :
+          '<div class="game-entry-icon-cover">'+icon(name)+"</div>")+
+        '<span class="game-entry-body"><span class="game-entry-title"><span class="game-entry-label">'+icon(name)+L(title)+'</span>'+
+        icon("right","muted")+'</span><span class="game-entry-status">'+esc(status)+"</span></span></button>").join("") + "</div>");
   }
   function farm() {
     const plots = lib().farmPlots;
@@ -117,8 +123,7 @@
           esc(t(spec?.name || row.fishID)) + '" data-action="estate:aquarium-resident:' + esc(row.id) + '">' + sprite("fish",spec) + "</button>";
       }).join("") + "</div>";
       const income = G.state.estate.aquariumIncome;
-      const title = immersive ? '<div class="estate-exit-immersive">'+raw(t("退出观赏","Exit viewing"),"immersive","left")+'</div>' :
-        '<div class="estate-overlay"><h2>'+L("水下花园","Underwater garden")+'</h2><small>'+L("自由巡游 · 点击鱼儿查看档案","Watch them swim or select a fish")+'</small></div>';
+      const title = immersive ? '<div class="estate-exit-immersive">'+raw(t("退出观赏","Exit viewing"),"immersive","left")+'</div>' : "";
       const guide = aquariumResidents.length ? "" : '<p class="estate-overlay estate-empty-aquarium">'+
         L("从鱼篓邀请第一位住客","Invite the first fish from your basket")+"</p>";
       const controls=immersive?"":btn("返回渔场","pond","left","primary")+btn("管理鱼篓","basket","fish")+
@@ -131,14 +136,13 @@
       '><strong data-fishing-caption></strong><div class="fishing-meter"><i data-fishing-marker></i></div></div>';
     const spotButtons=(window.EstateWorld?.spots || []).map(([zh,en],index)=>
       raw(t(zh,en),"fishing-spot:"+index,"water",fishingSpot===index?"estate-button-active":"secondary",active)).join("");
-    const spotControls='<div class="estate-overlay"><h2>'+L("湖畔垂钓","Lakeside fishing")+
-      '</h2><div class="row">'+spotButtons+"</div></div>";
+    const spotControls='<div class="row fishing-spots"><span class="muted small">'+L("钓点","Fishing spots")+'</span>'+spotButtons+"</div>";
     const tools = btn("抛竿","cast","play","primary",!lib().bait || active) +
       btn("收竿","reel","check","primary",!active)+ btn("放下鱼竿","cancel-cast",null,"secondary",!active) +
       raw(t("鱼篓","Fish basket") + " · " + stock,"basket","fish") +
       raw(t("水族馆","Aquarium") + " · " + aquariumResidents.length,"aquarium","water") + btn("鱼类图鉴","collection:fish","list");
     return shell(scene("FishingGameSceneV15",chip("coin",coins(lib().coins))+chip("fish",lib().bait+" "+t("鱼饵","bait")),
-      indicator+spotControls,tools,"fishing-scene"));
+      indicator,tools+spotControls,"fishing-scene"));
   }
 
   function collection(kind) {
@@ -279,6 +283,7 @@
         "/api/decorations/upgrade",{id});
     }
     if (action === "basket") basket();
+    if (action === "open-aquarium") { aquarium=true;immersive=false;G.go("playground","fishing"); }
     if (action === "aquarium-resident") aquariumResident(id);
     if (action === "pond" || action === "aquarium") {
       aquarium = action === "aquarium";

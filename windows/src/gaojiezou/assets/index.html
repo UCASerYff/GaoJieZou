@@ -22,19 +22,27 @@
 </head>
 <body>
   <a class="skip" href="#app">跳至内容</a>
-  <header class="chrome">
-    <div class="topbar">
+  <div class="desktop-shell">
+    <aside class="navigation-rail">
       <button class="brand plain" type="button" data-go="today"><img src="/art/GaoJieZouIcon.png" width="34" height="34" alt=""><strong id="brand-title">搞节奏</strong></button>
       <nav id="workspaces" class="workspaces" aria-label="工作台"></nav>
-      <div id="toolbar" class="toolbar"></div>
+      <div id="rail-actions" class="rail-actions"></div>
+    </aside>
+    <div class="workbench">
+      <header class="chrome">
+        <div class="topbar">
+          <div id="workspace-context" class="workspace-context"></div>
+          <div id="toolbar" class="toolbar"></div>
+        </div>
+        <div id="subbar" class="subbar" hidden></div>
+      </header>
+      <main id="app" tabindex="-1" aria-busy="true"><div class="workspace"><div class="status-panel" role="status"><span class="loading-ring" aria-hidden="true"></span><h1>正在打开搞节奏</h1></div></div></main>
     </div>
-    <div id="subbar" class="subbar" hidden></div>
-  </header>
-  <main id="app" tabindex="-1" aria-busy="true"><p class="empty">正在打开搞节奏…</p></main>
+  </div>
   <p id="notice" class="toast" role="status" hidden></p>
   <dialog id="editor" aria-labelledby="editor-title">
     <form class="dialog-form">
-      <div class="dialog-head"><h2 id="editor-title"></h2><button class="plain icon-only" type="button" data-close aria-label="关闭">×</button></div>
+      <div class="dialog-head"><h2 id="editor-title"></h2><button class="plain icon-only dialog-close" type="button" data-close aria-label="关闭">×</button></div>
       <div class="dialog-body"></div>
       <p class="dialog-error" role="alert" hidden></p>
       <div class="dialog-footer"></div>

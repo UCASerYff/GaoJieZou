@@ -215,19 +215,43 @@
     }
   }
   const formBody = form => Object.fromEntries(new FormData(form));
+  function focusedControl() {
+    const control = document.activeElement;
+    if (!control || control === document.body || editor.contains(control)) return null;
+    for (const name of ["id","data-go","data-action","data-health-action","data-fp-action","name"]) {
+      const value = control.getAttribute(name);
+      if (!value) continue;
+      const detail = control.getAttribute("data-value") || control.getAttribute("data-fp-value");
+      const key = control.hasAttribute("data-value") ? "data-value" : "data-fp-value";
+      const region = control.closest("#workspaces,.subtabs,#rail-actions,#toolbar,main");
+      const prefix = region?.id ? "#"+CSS.escape(region.id)+" " : region?.classList.contains("subtabs") ? ".subtabs " : "";
+      return prefix+"["+name+'="'+CSS.escape(value)+'"]'+(detail ? "["+key+'="'+CSS.escape(detail)+'"]' : "");
+    }
+    return null;
+  }
+  function restoreControl(selector) {
+    if (selector && !editor.open) {
+      const control = [...document.querySelectorAll(selector)].find(element => !element.disabled && element.getClientRects().length);
+      control?.focus({preventScroll:true});
+    }
+  }
+  let dialogControl;
   function modal(title, html, onSubmit, options = {}) {
     const form = editor.querySelector("form");
+    if (!editor.open) dialogControl = focusedControl();
     window.GaoWorld?.releaseWithin(form);
     editor.querySelector("h2").textContent = title;
+    editor.querySelector("[data-close]").setAttribute("aria-label",t("关闭","Close"));
     editor.querySelector(".dialog-body").innerHTML = html;
     editor.querySelector(".dialog-error").hidden = true;
-    editor.querySelector(".dialog-footer").innerHTML = button(t("取消", "Cancel"), {action:"close", className:"secondary"}) +
+    editor.querySelector(".dialog-footer").innerHTML = button(onSubmit ? t("取消","Cancel") : t("关闭","Close"), {action:"close", className:"secondary"}) +
       (onSubmit ? button(options.submitLabel || t("保存", "Save"), {type:"submit", className:options.danger ? "danger" : "primary"}) : "");
     dialogSubmit = onSubmit;
     confirmClose = options.confirmClose;
     editor.dataset.variant = options.className || "";
     if (!editor.open) editor.showModal();
-    form.querySelector(".dialog-body input:not([type=hidden]), .dialog-body select, .dialog-body textarea")?.focus();
+    const first = form.querySelector(".dialog-body :is(input:not([type=hidden]), select, textarea):not([disabled])");
+    (first || form.querySelector("[data-close]"))?.focus({preventScroll:true});
     return form;
   }
   const closeModal = () => {
@@ -293,13 +317,27 @@
     document.querySelector("#brand-title").textContent = t("搞节奏","Rhythm");
     document.querySelector(".skip").textContent = t("跳至内容","Skip to content");
     document.querySelector("#workspaces").innerHTML = Object.entries(sections).map(([id,[label,glyph]]) =>
-      navButton(id,label,glyph,id === page,"pill")).join("");
-    document.querySelector("#toolbar").innerHTML = menu("plus",t("记录","Record"),[
-      ["开始专注","rhythm/focus","play"],["记录睡眠","rhythm/sleep","moon"],["日常打卡","rhythm/habits","check"],
-      ["健康记录","health","heart"],["记下足迹","footprints","map"]
-    ].map(([label,to,glyph]) => button(t(label), {go:to,icon:glyph})).join("")) + menu("more",t("更多","More"),
-      button(t("设置","Settings"),{action:"settings",icon:"settings"}) +
-      button(t("桌面小组件","Desktop widgets"),{action:"widgets",icon:"grid"}) + button(t("退出","Quit"),{action:"quit",icon:"right"}));
+      navButton(id,label,glyph,id === page,"nav-link")).join("");
+    const settingsButton = button(t("设置","Settings"),{action:"settings",icon:"settings",className:"rail-utility"});
+    const widgetsButton = button(t("桌面小组件","Desktop widgets"),{action:"widgets",icon:"grid",className:"rail-utility"});
+    document.querySelector("#rail-actions").innerHTML = widgetsButton + settingsButton;
+    const active = state.library?.activeFocus || state.library?.activeSleep;
+    const currentTimer = state.library?.activeFocus ? "focus" : "sleep";
+    const timerTitle = currentTimer==="focus" ? t("专注计时","Focus timer") : t("睡眠计时","Sleep timer");
+    const workspace = sections[page];
+    document.querySelector("#workspace-context").innerHTML = '<span class="context-icon">'+icon(workspace[1])+'</span><strong>' +
+      localized(workspace[0]) + '</strong>' +
+      (active && page !== "today" && !(page==="rhythm" && section===currentTimer) ?
+        '<button type="button" class="context-timer" data-go="rhythm/'+currentTimer+'" aria-label="'+esc(timerTitle)+'">' +
+        icon(currentTimer==="focus"?"timer":"moon")+'<span data-timer="'+currentTimer+'"></span></button>' : "");
+    const quick = button(t("工作专注","Focus"),{go:"rhythm/focus",icon:"play"}) +
+      button(t("记录睡眠","Log sleep"),{action:"rhythm:sleep-entry",icon:"moon"}) +
+      button(t("日常打卡","Habits"),{go:"rhythm/habits",icon:"check"}) +
+      button(t("健康记录","Health records"),{go:"health",icon:"heart"}) +
+      button(t("记下足迹","Record a visit"),{action:"quick-visit",icon:"map"});
+    document.querySelector("#toolbar").innerHTML = (state.status === "ready" ? menu("plus",t("记录","Record"),quick) : "") +
+      menu("more",t("更多","More"),'<div class="compact-tools">'+settingsButton+widgetsButton+'</div>'+
+        button(t("退出","Quit"),{action:"quit",icon:"right"}));
     const bar = document.querySelector("#subbar");
     bar.hidden = page === "today" || (page === "playground" && section === "index");
     if (bar.hidden) { bar.innerHTML = ""; return; }
@@ -310,7 +348,7 @@
     bar.innerHTML = (page === "playground" ? button(t("乐园"),{go:"playground",icon:"left",className:"plain sub-back"}) : "") +
       '<nav class="subtabs" aria-label="' + localized("工作台栏目","Workspace sections") + '">' + tabs.map(([id,label,glyph]) =>
         navButton(page + "/" + id,label,glyph,section === id || section.startsWith(id + "-"),"tab")).join("") +
-      '</nav><div class="row sub-actions">' + (trailing || "") + "</div>";
+      '</nav>'+(trailing ? '<div class="row sub-actions">' + trailing + "</div>" : "");
   }
   function fingerprint() {
     const localClock = state?.clock ? localDay(state.clock) : "";
@@ -318,6 +356,7 @@
   }
   function render() {
     if (!state) return;
+    const focused = focusedControl();
     window.GaoWorld?.releaseWithin(app);
     navigation();
     app.dataset.workspace = page;
@@ -325,9 +364,10 @@
     app.removeAttribute("aria-busy");
     if (state.status !== "ready") {
       const fresh = state.status === "missing";
-      app.innerHTML = '<div class="workspace normal">' + header(fresh ? t("资料库尚未创建","Create your library") :
-        t("资料库暂不可用","Library unavailable")) + card("", "<p>" + esc(state.notice || t("请先创建你的本机资料库。","Create your local library to get started.")) + "</p>" +
-        (fresh ? button(t("创建我的资料库","Create my library"),{action:"create",className:"primary",icon:"plus"}) : "")) + "</div>";
+      const title = fresh ? t("创建本机资料库","Create a local library") : t("资料库暂不可用","Library unavailable");
+      app.innerHTML = statusPanel(title,state.notice || t("记录将保存在此电脑。","Records are stored on this PC."),fresh ? "list" : "lock",
+        fresh ? button(t("创建资料库","Create library"),{action:"create",className:"primary",icon:"plus"}) :
+          button(t("重试","Retry"),{action:"retry-load",icon:"clock",className:"secondary"}),!fresh);
     } else {
       let module = window.RhythmUI;
       if (page === "footprints" || section === "train") module = window.FootprintsUI;
@@ -340,7 +380,12 @@
       module?.bind?.(section);
       tick();
     }
+    restoreControl(focused);
     previousData = fingerprint();
+  }
+  function statusPanel(title, description, glyph, action, error = false) {
+    return '<div class="workspace"><section class="status-panel" role="'+(error?"alert":"status")+'"><span class="glyph">'+icon(glyph)+
+      "</span><h1>"+esc(title)+"</h1><p class=\"muted\">"+esc(description)+'</p><div class="row">'+action+"</div></section></div>";
   }
   function tick() {
     window.RhythmUI?.tick?.();
@@ -355,29 +400,37 @@
       !document.querySelector("details[open], main :is(input,textarea,select):focus"))) render();
     else tick();
   }
+  function baseColor(appearance) {
+    return appearance === "dark" || (appearance === "system" && matchMedia("(prefers-color-scheme: dark)").matches)
+      ? "#111815" : "#f3f5f3";
+  }
   function settings() {
     const p = state.settings;
     background = p.backgroundHex;
     const labels = [["focus","专注 CSV","Focus CSV"],["sleep","睡眠 CSV","Sleep CSV"],["habits","打卡 CSV","Habit CSV"]];
-    const body = '<div class="settings-section"><h3>' + localized("外观") + '</h3><div class="form-grid">' +
+    const body = '<div class="settings-grid"><section class="settings-section"><h3>' + icon("settings") + localized("外观与语言","Appearance and language") + '</h3><div class="form-grid">' +
       select("appearance",t("界面模式"),[["system",t("跟随系统")],["light",t("浅色")],["dark",t("深色")]],p.appearance) +
       select("language",t("语言","Language"),[["zh-Hans","简体中文"],["en","English"]],p.language) + '</div><div class="row">' +
-      input("backgroundHex",t("背景颜色"),p.backgroundHex || "#f4f0e8",{type:"color"}) +
-      button(t("恢复系统颜色"),{action:"reset-color",className:"secondary"}) + '</div></div><div class="settings-section"><h3>' +
-      localized("睡眠") + "</h3>" + input("sleepTargetHours",t("睡眠目标（小时）","Sleep target (hours)"),p.sleepTargetHours,{type:"number",min:5,max:12,step:.5,required:true}) +
-      '</div><div class="settings-section"><h3>' + localized("提醒") + "</h3>" +
-      checkbox("habitReminderEnabled",t("每日打卡提醒"),p.habitReminderEnabled) +
+      input("backgroundHex",t("背景颜色"),p.backgroundHex || baseColor(p.appearance),{type:"color"}) +
+      button(t("恢复系统颜色"),{action:"reset-color",className:"secondary"}) + '</div></section><section class="settings-section"><h3>' +
+      icon("clock") + localized("计时与提醒","Timers and reminders") + '</h3><div class="form-grid">' +
+      input("sleepTargetHours",t("睡眠目标（小时）","Sleep target (hours)"),p.sleepTargetHours,{type:"number",min:5,max:12,step:.5,required:true}) +
       input("reminderTime",t("提醒时间"),[p.habitReminderHour,p.habitReminderMinute || 0].map(n => String(n).padStart(2,"0")).join(":"),{type:"time",required:true}) +
-      '</div><div class="settings-section"><h3>' + localized("关于","About") + '</h3><p class="muted">Windows ' + esc(state.version) +
-      ' · <code>%APPDATA%\\GaoSeries\\Rhythm</code></p><div class="row">' + labels.map(([key,zh,en]) =>
+      '</div>' + checkbox("habitReminderEnabled",t("每日打卡提醒"),p.habitReminderEnabled) +
+      '</section><section class="settings-section settings-data"><h3>' + icon("list") + localized("资料与版本","Data and version") +
+      '</h3><dl><div><dt>'+localized("资料路径","Data location")+'</dt><dd><code>%APPDATA%\\GaoSeries\\Rhythm</code></dd></div><div><dt>'+
+      localized("版本","Version")+'</dt><dd>Windows '+esc(state.version)+'</dd></div></dl><div class="row">' + labels.map(([key,zh,en]) =>
         button(t(zh,en),{action:"csv:" + key,icon:"download",className:"secondary",disabled:state.status !== "ready"})).join("") +
-      button(t("导出诊断信息","Export diagnostics"),{action:"diagnostics",icon:"download",className:"secondary"}) + "</div></div>";
+      button(t("导出诊断信息","Export diagnostics"),{action:"diagnostics",icon:"download",className:"secondary"}) + "</div></section></div>";
     const form = modal(t("设置"),body,async data => {
       const [hour,minute] = data.reminderTime.split(":").map(Number);
       await act("/api/settings",{...data,habitReminderEnabled:data.habitReminderEnabled === "on",
         habitReminderHour:hour,habitReminderMinute:minute,backgroundHex:background},{throw:true});
-    });
+    },{className:"workbench-settings"});
     form.elements.backgroundHex.addEventListener("input",event => { background = event.target.value; });
+    form.elements.appearance.addEventListener("change",event => {
+      if (!background) form.elements.backgroundHex.value = baseColor(event.target.value);
+    });
   }
   function closeMenus() {
     document.querySelectorAll(".menu[open]").forEach(menu => { menu.open = false; });
@@ -391,10 +444,16 @@
   editor.addEventListener("click",event => {
     if ((event.target === editor || event.target.closest("[data-close]")) && !editor.querySelector("form").dataset.saving) closeModal();
   });
-  editor.addEventListener("close", () => window.GaoWorld?.releaseWithin(editor));
+  editor.addEventListener("close", () => {
+    window.GaoWorld?.releaseWithin(editor);
+    restoreControl(dialogControl);
+  });
   editor.addEventListener("cancel",event => {
     event.preventDefault();
     if (!editor.querySelector("form").dataset.saving) closeModal();
+  });
+  editor.querySelector("form").addEventListener("input",() => {
+    editor.querySelector(".dialog-error").hidden = true;
   });
   editor.querySelector("form").addEventListener("submit",async event => {
     event.preventDefault();
@@ -402,9 +461,12 @@
     if (!dialogSubmit || form.dataset.saving) return;
     const submit = form.querySelector("[type=submit]");
     const message = form.querySelector(".dialog-error");
+    const caption = submit.textContent;
     form.dataset.saving = "true";
+    form.setAttribute("aria-busy","true");
     message.hidden = true;
     submit.disabled = true;
+    submit.textContent = t("处理中…","Working…");
     try {
       if (await dialogSubmit(formBody(form),form) !== false) editor.close();
     } catch (error) {
@@ -412,31 +474,44 @@
       message.textContent = error.message;
     } finally {
       delete form.dataset.saving;
+      form.removeAttribute("aria-busy");
       submit.disabled = false;
+      submit.textContent = caption;
     }
   });
   document.addEventListener("click",async event => {
     const target = event.target.closest("button");
     if (!event.target.closest(".menu") || target) closeMenus();
     if (!target?.matches("[data-go],[data-action]")) return;
-    if (target.dataset.go) { go(...target.dataset.go.split("/")); return; }
+    if (target.dataset.go) {
+      go(...target.dataset.go.split("/"));
+      if (event.detail === 0 && !target.closest(".workspaces,.subtabs")) app.focus({preventScroll:true});
+      return;
+    }
     const action = target.dataset.action;
     if (action === "close" && !editor.querySelector("form").dataset.saving) closeModal();
     if (action === "create") await act("/api/library/create");
     if (action === "settings") settings();
+    if (action === "quick-visit" && state?.status==="ready") {
+      go("footprints","map");
+      window.FootprintsUI?.openVisit?.();
+    }
+    if (action === "retry-load") bootstrap();
     if (action === "widgets") await act("/api/platform/widgets",{},{render:false});
     if (action === "diagnostics") await download("/api/export/diagnostics.txt","Rhythm-diagnostics.txt");
     if (action === "quit") modal(t("退出搞节奏？","Quit Rhythm?"),"<p>" +
       localized("应用将保存记录并暂停正在运行的专注。","Rhythm will save records and pause any running focus session.") + "</p>",async () => {
         await act("/api/shutdown",{},{throw:true,render:false});
         document.querySelector(".chrome").hidden = true;
+        document.querySelector(".navigation-rail").hidden = true;
         app.innerHTML = empty(t("搞节奏已退出。","Rhythm has quit."));
         clearInterval(poll);
         window.close();
       },{submitLabel:t("退出","Quit")});
     if (action === "reset-color") {
       background = "";
-      editor.querySelector('[name="backgroundHex"]').value = "#f4f0e8";
+      const fields = editor.querySelector("form").elements;
+      fields.backgroundHex.value = baseColor(fields.appearance.value);
     }
     if (action.startsWith("csv:")) {
       const key = action.split(":")[1];
@@ -446,6 +521,18 @@
   });
   document.addEventListener("keydown",event => {
     if (event.key === "Escape" && !editor.open) closeMenus();
+    const navigation = event.target.closest?.("#workspaces,.subtabs");
+    if (navigation && ["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End"].includes(event.key)) {
+      const entries = [...navigation.querySelectorAll("button")];
+      const index = entries.indexOf(event.target);
+      if (index >= 0 && entries.length) {
+        event.preventDefault();
+        const next = event.key === "Home" ? 0 : event.key === "End" ? entries.length - 1 :
+          (index + (["ArrowLeft","ArrowUp"].includes(event.key) ? -1 : 1) + entries.length) % entries.length;
+        entries[next].focus();
+      }
+      return;
+    }
     if (editor.open || event.altKey || event.metaKey || event.target.closest?.("input,textarea,select,button,a,summary")) return;
     if (event.ctrlKey && /^[0-5]$/.test(event.key)) {
       event.preventDefault();
@@ -462,13 +549,16 @@
   document.addEventListener("visibilitychange",() => {
     if (!document.hidden) refresh({onlyChange:true}).catch(() => {});
   });
-  document.addEventListener("DOMContentLoaded",async () => {
+  async function bootstrap() {
     try {
       translations = await fetch("/localization/en.json").then(response => response.json()).catch(() => ({}));
       await refresh();
       route(new URLSearchParams(location.search).get("route"));
     } catch (error) {
-      app.innerHTML = empty(error.message);
+      app.removeAttribute("aria-busy");
+      app.innerHTML = statusPanel(t("无法打开搞节奏","Couldn't open Rhythm"),error.message,"lock",
+        button(t("重试","Retry"),{action:"retry-load",icon:"clock",className:"secondary"}),true);
     }
-  });
+  }
+  document.addEventListener("DOMContentLoaded",bootstrap);
 })();

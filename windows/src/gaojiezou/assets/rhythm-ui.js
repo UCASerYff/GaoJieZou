@@ -72,43 +72,76 @@
       '<span>' + esc(t(action.title)) + '</span><small class="teal">🎣 +1</small></button>';
   }
 
+  const metric = (label,value,glyphName,to,colorName="") => '<button type="button" data-go="'+to+'" aria-label="'+
+    esc(label+" "+value)+'">'+glyph(glyphName,colorName)+'<span><strong>'+esc(value)+'</strong><small>'+esc(label)+'</small></span></button>';
+  function timerCard(mode,compact=false) {
+    const isFocus = mode === "focus";
+    const session = isFocus ? lib().activeFocus : lib().activeSleep;
+    const sleeping = lib().activeSleep;
+    const focusing = lib().activeFocus;
+    const iconName = isFocus ? "timer" : "moon";
+    const running = Boolean(session && (!isFocus || session.segmentStartedAt != null));
+    const status = session ? running ? t("计时中","Running") : t("已暂停","Paused") : t("待开始","Ready");
+    const target = session?.targetHours ?? G.state.settings.sleepTargetHours;
+    const title = isFocus ? t("专注计时","Focus timer") : t("睡眠计时","Sleep timer");
+    const shortcut = (isFocus ? ' data-focus-shortcut ' : " ");
+    const mainAction = session ? (isFocus ? (running ? "focus-pause" : "focus-resume") : "sleep-finish") : (isFocus ? "focus-start" : "sleep-start");
+    const mainLabel = session ? (isFocus ? running ? "暂停" : "继续" : "起床并保存") : isFocus ? "开始专注" : "开始睡眠";
+    const start = cmd(mainLabel,mainAction,session ? isFocus ? running ? "pause" : "play" : "check" : isFocus ? "play" : "moon",
+      session && isFocus ? "secondary" : "primary",!session && (isFocus ? !!sleeping : !!focusing)).replace("<button ","<button"+shortcut);
+    const finish = session ? (isFocus ? cmd("结束并保存","focus-finish","check","primary") : "")+
+      cmd("放弃",mode+"-cancel",null,"danger") : "";
+    let context = "";
+    if (isFocus && session) {
+      context = focusTitle(session);
+      if (session.pausedForSystem) context += " · "+t("系统暂停，返回后继续","Paused by Windows. Resumes on return.");
+    } else if (isFocus && sleeping) context = t("睡眠正在计时。","Sleep timer is running.");
+    else if (!isFocus) context = focusing && !session ? t("专注正在计时。","Focus timer is running.") :
+      format("睡眠目标 %.1f 小时","Sleep target %.1f hours",target);
+    const setup = compact || session ? "" : isFocus ? '<div class="focus-bind">'+select("focusAction",t("关联短期行动"),
+      [["",t("其他事件")],...actions().filter(action => !action.isCompleted).map(action => [action.id,t(action.title)])])+"</div>" :
+      '<div class="focus-bind">'+input("targetHours",t("睡眠目标（小时）","Sleep target (hours)"),target,
+        {type:"number",min:5,max:12,step:.5})+"</div>";
+    return card("",'<div class="timer-caption"><div class="session-label">'+glyph(iconName,isFocus?"":"purple")+
+      '<h2>'+esc(title)+'</h2></div><span class="session-status" data-state="'+(session?(running?"running":"paused"):"idle")+'">'+
+      esc(status)+'</span></div><div class="timer-readout"><div><strong class="timer-number"'+(session?' data-timer="'+mode+'"':"")+'>'+
+      (session?"":"00:00:00")+'</strong>'+(context?'<p class="muted timer-subtitle">'+esc(context)+"</p>":"")+
+      '</div><div class="row timer-actions">'+start+finish+'</div></div>'+setup,{className:"timer-card"});
+  }
+
   function todayPage() {
-    const focus = lib().activeFocus, sleep = lib().activeSleep;
     const pending = scheduled(today());
     const night = nightSleep(today());
     const crops = lib().farmPlots.filter(row => row.cropID);
     const mature = crops.filter(row => row.growthMinutes >= (G.state.catalog.crops.find(crop => crop.id === row.cropID)?.minutes ?? Infinity));
-    const intro = '<div class="stack date-intro"><span class="small muted">' + esc(date(clock(),{month:"long",day:"numeric",weekday:"long"})) +
-      "</span><h1>" + L("把今天，过成自己的节奏。","Make today your own rhythm.") + "</h1></div>";
-    const label = focus ? t("此刻专注") : sleep ? t("正在睡眠计时") : t("今天的第一小步");
-    const description = focus ? focusTitle(focus) : sleep ? t("安心休息，记录会在后台继续") :
-      t("一段专注、一次打卡，都是今天真实的痕迹。","A focus session or a check-in leaves a real mark on today.");
-    const hero = '<section class="hero"><div class="stack"><small>' + esc(label) + "</small>" +
-      (focus || sleep ? '<h2 class="timer-number" data-timer="' + (focus ? "focus" : "sleep") + '"></h2>' :
-        "<h2>" + L("从一件小事开始","Start with one small thing") + "</h2>") + '<p class="muted">' + esc(description) + '</p><div class="row">' +
-      (focus || sleep ? go("查看计时",focus ? "rhythm/focus" : "rhythm/sleep","clock","clay-button") :
-        go("开始专注","rhythm/focus",null,"clay-button") + cmd("记录睡眠","sleep-entry",null,"secondary") + go("今日打卡","rhythm/habits",null,"secondary")) +
-      '</div></div><div class="hero-symbol">' + icon(focus ? "timer" : sleep ? "moon" : "leaf") + "</div></section>";
-    const stats = '<div class="grid tiles">' +
-      tile(countDone(today())+"/"+pending.length,t("今日打卡"),"check","teal") +
-      tile(duration(focusSeconds(today())),t("今日专注"),"timer") +
-      tile(night ? duration(night.durationSeconds) : "—",t("昨夜睡眠"),"moon","purple") +
-      tile(lib().coins,t("庄园金币"),"coin","orange") + "</div>";
-    const pair = '<div class="grid two today-pair">' +
+    const intro = header(t("今日工作台","Today"),date(clock(),{year:"numeric",month:"long",day:"numeric",weekday:"long"}));
+    const stats = '<div class="card stat-band" aria-label="'+L("今日数据","Today's metrics")+'">' +
+      metric(t("今日专注"),duration(focusSeconds(today())),"timer","rhythm/focus") +
+      metric(t("昨夜睡眠"),night ? duration(night.durationSeconds) : "—","moon","rhythm/sleep","purple") +
+      metric(t("今日打卡"),countDone(today())+"/"+pending.length,"check","rhythm/habits","teal") +
+      metric(t("庄园金币"),lib().coins,"coin","playground","orange") + "</div>";
+    const pair = '<div class="dashboard-pair">' +
       card(t("今日打卡"),rows(pending,habit => habitButton(habit,today()),t("今天没有安排打卡目标。","No habits scheduled today.")),{actions:go("全部","rhythm/habits")}) +
       card(t("下一步行动"),rows(actions().filter(row => !row.isCompleted),actionButton,t("所有短期行动都已完成。","All short actions are complete.")),{actions:go("全部","rhythm/actions")}) + "</div>";
+    const quick = card(t("快速记录","Quick record"),'<div class="quick-links">'+
+      cmd("补录睡眠","sleep-entry","moon","secondary")+
+      button(t("记录健康","Record health"),{go:"health",icon:"heart"})+
+      button(t("记下足迹","Record a visit"),{action:"quick-visit",icon:"map"})+"</div>");
     const health = G.state.health;
     const healthCard = health ? card(t("今日健康","Health today"),'<div class="row health-today">' +
       [[String(health.water || 0)+" mL",t("饮水","Water"),"water"],[health.meals || 0,t("饮食","Meals"),"meals"],
         [duration((health.exerciseMinutes || 0)*60),t("运动","Exercise"),"exercise"],...(!health.hideWeight ? [[health.weight == null ? "—" : health.weight + " kg",t("体重","Weight"),"weight"]] : [])]
         .map(([value,label,symbol]) => '<span class="row">' + glyph(symbol) + '<span><strong>' + esc(value) + '</strong><br><small class="muted">' + esc(label) + "</small></span></span>").join("") +
       "</div>",{actions:go("查看","health")}) : "";
-    const estate = card(t("节奏庄园"),"<p class=\"muted\">" + esc(format("%d 块农田生长中 · %d 块可收获 · %d 只牲畜 · 已发现 %d/%d 种鱼",
-      "%d planted · %d ready · %d animals · %d/%d fish discovered",crops.length,mature.length,habitats().length,
-      Object.keys(lib().fishCaught).length,G.state.catalog.fish.length)) + "</p>",{className:"estate-summary",actions:go("进入农场","playground/farm","leaf","primary")});
+    const estate = card(t("节奏庄园"),"<p class=\"muted\">" + esc(format("%d 块农田 · %d 块可收获 · %d 只牲畜 · %d/%d 种鱼",
+      "%d planted · %d ready · %d animals · %d/%d fish",crops.length,mature.length,habitats().length,
+      Object.keys(lib().fishCaught).length,G.state.catalog.fish.length)) + "</p>",{className:"estate-summary",actions:go("查看","playground")});
     const rewards = lib().rewardEvents.length ? card(t("最近奖励"),rows(lib().rewardEvents.slice(0,4),row =>
       item(t(row.title),t(row.detail),row.coins ? badge("+"+row.coins,"orange") : "",row.symbol))) : "";
-    return shell(intro+hero+stats+pair+healthCard+monthCard(false)+estate+rewards,"today-workspace");
+    const mode = lib().activeSleep ? "sleep" : "focus";
+    return shell(intro+stats+'<div class="dashboard-grid today-layout"><div class="dashboard-main">'+timerCard(mode,true)+pair+
+      '<div class="daily-calendar">'+monthCard(false)+'</div></div><aside class="dashboard-side">'+quick+healthCard+estate+
+      (rewards ? '<div class="daily-rewards">'+rewards+"</div>" : "")+'</aside></div>',"today-workspace");
   }
 
   function eventRows(key,justChores) {
@@ -143,71 +176,61 @@
   }
 
   function focusPage() {
-    const focus = lib().activeFocus;
-    const play = focus?.segmentStartedAt != null;
-    const paused = focus ? (focus.pausedForSystem ? '<p class="orange row">' + icon("lock") + L("检测到锁屏或休眠，专注已暂停，解锁后会自动继续") +
-      "</p>" : !play ? '<p class="muted">' + L("已手动暂停","Paused manually") + "</p>" : "") : "";
-    const shortcut = button(t(focus ? play ? "暂停" : "继续" : "开始专注"),{action:"rhythm:focus-" + (focus ? play ? "pause" : "resume" : "start"),
-      icon:play ? "pause" : "play",className:focus ? "secondary" : "primary",disabled:!focus && !!lib().activeSleep}).replace("<button ","<button data-focus-shortcut ");
-    const control = focus ? card("",'<div class="session stack">' + glyph(play ? "timer" : "pause") +
-      "<h2>" + esc(focusTitle(focus)) + '</h2><strong class="timer-number" data-timer="focus"></strong>' + paused +
-      '<div class="row">' + shortcut + cmd("结束并保存","focus-finish","check","primary") + cmd("放弃","focus-cancel",null,"danger") + "</div></div>") :
-      card("",'<div class="stack"><div class="session-label">' + glyph("timer") + '<div><h2>' + L("开始一段有效专注") +
-      '</h2><p class="muted">' + L("锁屏、熄屏或 Windows 睡眠时自动暂停，返回后自动继续。","Focus pauses while Windows is locked, its display is off, or the system sleeps.") +
-      "</p></div></div>" + select("focusAction",t("关联短期行动"),[["",t("其他事件")],...actions().filter(a => !a.isCompleted).map(a => [a.id,t(a.title)])]) +
-      '<div class="row spaced"><p class="muted small">' + esc(format("每有效专注 %d 分钟获得 1 金币，每次最多 %d 金币；所有已播种作物同时成长。",
-        "Earn 1 coin per %d minutes of focus, up to %d coins per session. Planted crops grow as you focus.",15,20)) + "</p>" + shortcut + "</div></div>");
     const planted = lib().farmPlots.map(plot => [plot,G.state.catalog.crops.find(crop => crop.id === plot.cropID)]).filter(([,crop]) => crop);
-    const farm = card(t("专注促进作物生长","Focus grows your crops"),rows(planted,([plot,crop]) =>
+    const farm = card(t("农场进度","Farm progress"),rows(planted,([plot,crop]) =>
       item(t(crop.name),format("%d / %d 分钟","%d / %d min",Math.floor(plot.growthMinutes),crop.minutes),
-        '<progress max="' + crop.minutes + '" value="' + Math.min(crop.minutes,plot.growthMinutes) + '"></progress>',"leaf"),
-      t("农场里还没有播种的作物。","No crops planted in the farm yet.")),{actions:go("进入农场","playground/farm","leaf")});
-    return shell(control+farm+card(t("专注记录"),rows(lib().focusRecords.slice(0,30),row =>
+        '<progress aria-label="'+esc(t(crop.name))+'" max="' + crop.minutes + '" value="' + Math.min(crop.minutes,plot.growthMinutes) + '"></progress>',"leaf"),
+      t("还没有播种的作物。","No crops planted yet."))+'<p class="timer-explain muted small">'+
+      L("每专注 15 分钟获得 1 金币，单次最多 20 金币。","Earn 1 coin per 15 minutes of focus, up to 20 per session.")+"</p>",
+      {actions:go("进入农场","playground/farm","right")});
+    const records = card(t("专注记录"),rows(lib().focusRecords.slice(0,30),row =>
       item(focusTitle(row),timestamp(row.startedAt) + " – " + time(row.endedAt),
         badge(duration(row.durationSeconds))+(row.earnedCoins > 0 ? badge("+"+row.earnedCoins,"orange") : ""),"timer"),
-      t("完成第一次专注后，记录会出现在这里。","Your first completed focus session will appear here.")),
-    {actions:'<span class="muted small">' + esc(format("共 %d 次","%d sessions",lib().focusRecords.length)) + "</span>"}));
+      t("暂无已保存的专注记录。","No saved focus sessions.")),
+    {actions:'<span class="muted small">' + esc(format("共 %d 次","%d sessions",lib().focusRecords.length)) + "</span>"});
+    return shell(header(t("工作专注"),t("锁屏、熄屏或待机时自动暂停。","Pauses when Windows locks, the display turns off or the PC sleeps."))+
+      '<div class="timer-layout">'+timerCard("focus")+farm+"</div>"+records);
   }
 
   function sleepPage() {
-    const sleep = lib().activeSleep;
-    const target = sleep?.targetHours ?? G.state.settings.sleepTargetHours;
-    const control = sleep ? card("",'<div class="session stack">' + glyph("moon","purple") +
-      '<h2>' + L("正在睡眠计时") + '</h2><strong class="timer-number" data-timer="sleep"></strong><p class="muted">' +
-      esc(format("睡眠目标 %.1f 小时","Sleep target %.1f hours",target)) + '</p><div class="row">' +
-      cmd("起床并保存","sleep-finish","check","primary")+cmd("放弃","sleep-cancel",null,"danger")+"</div></div>") :
-      card("",'<div class="stack"><div class="session-label">' + glyph("moon","purple") + '<div><h2>' +
-      L("开始睡眠计时","Start sleep timer") + '</h2><p class="muted">' +
-      L("锁屏、熄屏和合盖不会中断睡眠记录") + "</p></div></div>" +
-      input("targetHours",t("睡眠目标"),target,{type:"number",min:5,max:12,step:.5}) + '<div class="row">' +
-      cmd("开始睡眠","sleep-start","moon","primary",!!lib().activeFocus)+cmd("记录睡眠","sleep-entry","plus","secondary")+"</div></div>");
-    const animals = card(t("睡眠带动牧场成长","Sleep grows your pasture"),rows(habitats(),resident => {
+    const animals = card(t("牧场进度","Pasture progress"),rows(habitats(),resident => {
       const animal = G.state.catalog.animals.find(spec => spec.id === resident.animalID);
       return item(t(animal?.name || resident.animalID),format("%d 份待收取","%d products ready",resident.pendingProducts || 0),"","paw",{color:"clay"});
-    },t("牧场里还没有牲畜。","The pasture has no animals yet.")),{actions:go("进入牧场","playground/pasture","paw")});
-    return shell(control + animals + card(t("睡眠记录"),rows(lib().sleepRecords.slice(0,60),row =>
+    },t("牧场里还没有牲畜。","The pasture has no animals yet.")),{actions:go("进入牧场","playground/pasture","right")});
+    const records = card(t("睡眠记录"),rows(lib().sleepRecords.slice(0,60),row =>
       item(timestamp(row.startedAt) + " – " + timestamp(row.endedAt),row.origin === "health" ? t("来自健康","From Health") : row.manualEntry ?
         t("手动录入","Manual entry") : t("睡眠计时"),badge(duration(row.durationSeconds),"purple")+badge(score(row))+
         smallCmd("删除","sleep-delete:"+row.id,"trash","danger"),"moon",{color:"purple"}),t("暂无睡眠记录","No sleep records")),
-      {actions:cmd("记录睡眠","sleep-entry","plus","secondary")}));
+      {actions:'<span class="muted small">'+L("与健康共享","Shared with Health")+"</span>"});
+    const sync = G.state.sleepSyncError ? '<p class="workspace-warning" role="status">'+esc(G.state.sleepSyncError)+"</p>" : "";
+    return shell(header(t("睡眠计时"),t("关屏或待机时继续计时。","Continues while the display is off or Windows sleeps."),
+      cmd("补录睡眠","sleep-entry","plus","primary"))+
+      '<div class="timer-layout">'+timerCard("sleep")+animals+"</div>"+sync+records);
   }
 
   function habitPage() {
     const todayHabits = scheduled(today());
-    return shell(header(t("日常打卡"),t("完成每天的小事，积累稳定节奏"),cmd("补打卡","habit-backfill","clock","secondary") +
-      cmd("新增打卡","habit-edit","plus","primary")) +
-      card(t("今日打卡"),rows(todayHabits,habit => habitButton(habit,today()),t("今天没有安排打卡目标。"))) +
-      card(t("打卡目标","Habits"),rows(lib().habits,habit => item(t(habit.title),
+    const completed = countDone(today());
+    const label = format("完成 %d / %d 项","%d / %d complete",completed,todayHabits.length);
+    const daily = card(t("今日打卡"),(todayHabits.length ? '<div class="habit-progress"><progress aria-label="'+esc(label)+
+      '" value="'+completed+'" max="'+todayHabits.length+'"></progress></div>' : "")+
+      rows(todayHabits,habit => habitButton(habit,today()),t("今天没有安排打卡目标。")),{actions:'<span class="muted small">'+esc(label)+"</span>"});
+    const manage = card(t("打卡目标","Habits"),rows(lib().habits,habit => item(t(habit.title),
         (habit.weekdays || []).map(value => date(new Date(2024,0,6+value),{weekday:"short"})).join(" · "),
         badge("+"+habit.rewardCoins,"orange")+smallCmd("编辑","habit-edit:"+habit.id,"edit")+
-        smallCmd("删除","habit-delete:"+habit.id,"trash","danger"),habit.symbol),t("还没有打卡目标。","No habits yet."))));
+        smallCmd("删除","habit-delete:"+habit.id,"trash","danger"),habit.symbol),t("还没有打卡目标。","No habits yet.")));
+    return shell(header(t("日常打卡"),date(clock(),{month:"long",day:"numeric",weekday:"long"}),
+      cmd("补打卡","habit-backfill","clock","secondary")+cmd("新增打卡","habit-edit","plus","primary"))+
+      '<div class="dashboard-grid habit-workspace">'+daily+manage+"</div>");
   }
   function chorePage() {
-    return shell(header(t("一些琐事"),format("安排跨天琐事，每完成一项获得 %d 金币","Schedule chores across days. Earn %d coins per completed chore.",5),
-      cmd("新增琐事","chore-edit","plus","primary")) + monthCard(true) + card(t("琐事清单","Chore list"),rows(lib().chores,chore =>
+    const list = card(t("琐事清单","Chore list"),rows(lib().chores,chore =>
       item(chore.title,date(chore.startDate)+(day(chore.startDate) !== day(chore.endDate) ? " – "+date(chore.endDate) : ""),
         smallCmd(chore.isCompleted ? "取消完成" : "完成","chore-toggle:"+chore.id,chore.isCompleted ? "check" : "circle")+
-        smallCmd("编辑","chore-edit:"+chore.id,"edit")+smallCmd("删除","chore-delete:"+chore.id,"trash","danger"),"tray"))));
+        smallCmd("编辑","chore-edit:"+chore.id,"edit")+smallCmd("删除","chore-delete:"+chore.id,"trash","danger"),"tray")),
+      {actions:'<span class="muted small">'+esc(format("%d 项未完成","%d unfinished",lib().chores.filter(chore=>!chore.isCompleted).length))+"</span>"});
+    return shell(header(t("一些琐事"),"",cmd("新增琐事","chore-edit","plus","primary"))+
+      '<div class="dashboard-grid chore-workspace">'+monthCard(true)+list+"</div>");
   }
 
   const statusNames = {planned:["未开始","Planned"],active:["进行中","In progress"],paused:["已暂停","Paused"],completed:["已完成","Completed"]};
@@ -243,23 +266,24 @@
     const charts = [...yearItems].sort((a,b) => a-b).map(year => timeline(String(year),goals.map(goal =>
       ({title:goal.title,start:goal.startDate,end:goal.targetDate,status:goal.status})),
       cocoa(new Date(year,0,1)),cocoa(new Date(year,11,31,23,59,59)))).join("");
-    return shell(header(t("长期目标"),t("用结果、里程碑和进度管理长期方向"),cmd("新增长期目标","goal-edit","plus","primary")) +
-      '<div class="grid two">'+tile(goals.filter(row => row.status === "active").length,t("进行中"),"play")+
-      tile(goals.filter(row => row.status === "completed").length,t("已完成"),"check","teal")+"</div>" +
-      card(t("长期目标时间线","Goal timeline"),charts || empty(t("暂无目标","No goals yet"))) +
-      '<div class="grid two">' + goals.map(goal => {
+    const list = goals.map(goal => {
         const value = progress(goal), children = actions().filter(row => row.goalID === goal.id);
         return card(t(goal.title),'<div class="stack"><div class="row spaced"><span class="muted small">' +
           esc(date(goal.startDate)+" – "+date(goal.targetDate)) + "</span>" + badge(statusName(goal.status)) + "</div>" +
           (goal.reason ? "<p>" + esc(t(goal.reason)) + "</p>" : "") + (goal.outcome ? '<p class="muted">' + esc(t(goal.outcome)) + "</p>" : "") +
           '<div class="row spaced"><strong>' + value + "%</strong>" + (goal.targetValue > 0 ?
           '<span class="muted">' + esc(goal.currentValue+" / "+goal.targetValue+" "+(goal.unit || "")) + "</span>" : "") +
-          '</div><progress value="' + value + '" max="100"></progress>' + (children.length ? rows(children,actionButton) : "") +
+          '</div><progress aria-label="'+esc(t(goal.title))+'" value="' + value + '" max="100"></progress>' + (children.length ? rows(children,actionButton) : "") +
           '<div class="row">' + cmd("新增短期行动","action-add:"+goal.id,"plus","secondary") +
           (goal.status !== "completed" ? cmd("标记完成","goal-complete:"+goal.id,"check","secondary") : "") +
           "</div></div>",{actions:smallCmd("编辑","goal-edit:"+goal.id,"edit")+
           smallCmd("删除","goal-delete:"+goal.id,"trash","danger")});
-      }).join("") + "</div>");
+      }).join("");
+    return shell(header(t("长期目标"),"",cmd("新增长期目标","goal-edit","plus","primary"))+
+      '<div class="dashboard-grid"><div class="stack">'+(list||card("",empty(t("暂无目标","No goals yet"))))+'</div>'+
+      '<aside class="stack"><div class="grid two goal-summary">'+tile(goals.filter(row => row.status === "active").length,t("进行中"),"play")+
+      tile(goals.filter(row => row.status === "completed").length,t("已完成"),"check","teal")+"</div>" +
+      card(t("目标时间线","Goal timeline"),charts || empty(t("暂无目标","No goals yet"))) + "</aside></div>");
   }
   function actionPage() {
     const all = actions();
@@ -274,10 +298,7 @@
     }).join("");
     const filter = '<div class="row segmented">' + [["all","全部"],["open","待完成"],["done","已完成"]].map(([value,label]) =>
       cmd(label,"action-filter:"+value,null,value === actionFilter ? "primary" : "secondary")).join("") + "</div>";
-    return shell(header(t("短期行动"),t("把长期目标拆成下一步可以完成的行动"),cmd("新增短期行动","action-edit","plus","primary")) +
-      card(t("近两月行动时间线","Two-month action timeline"),twoMonths +
-        '<p class="muted small">' + esc(format("%d 项未安排日期","%d unscheduled",all.length-chartActions.length)) + "</p>") +
-      card(t("行动清单","Actions"),rows(filtered,action => {
+    const list = card(t("行动清单","Actions"),rows(filtered,action => {
         const goal = lib().longGoals.find(row => row.id === action.goalID);
         const detail = [goal ? t(goal.title) : "",action.startDate != null ? date(action.startDate) + (action.endDate != null && day(action.endDate) !== day(action.startDate)
           ? " – " + date(action.endDate) : "") : "",format("预计 %d 分钟","%d min estimated",action.estimatedMinutes),
@@ -285,7 +306,11 @@
         return item(t(action.title),detail,smallCmd(action.isCompleted ? "取消完成" : "完成","action-toggle:"+action.id,
           action.isCompleted ? "check" : "circle")+smallCmd("开始专注","focus-for:"+action.id,"timer","plain")+
           smallCmd("编辑","action-edit:"+action.id,"edit")+smallCmd("删除","action-delete:"+action.id,"trash","danger"),"list");
-      }),{actions:filter}));
+      }),{actions:filter});
+    return shell(header(t("短期行动"),"",cmd("新增短期行动","action-edit","plus","primary"))+
+      '<div class="dashboard-grid">'+list+
+      card(t("未来两个月","Next two months"),twoMonths +
+        '<p class="muted small">' + esc(format("%d 项未安排日期","%d unscheduled",all.length-chartActions.length)) + "</p>")+"</div>");
   }
 
   function statisticsPage() {
@@ -294,7 +319,8 @@
       const sequence = Array.from({length:period},(_,i) => day(stepDay(clock(),i+1-period)));
       const values = sequence.map(build);
       const max = Math.max(1,...values);
-      return card(t(label),'<div class="chart" role="img" aria-label="' + esc(t(label)+ " · " + period + t(" 天"," days")) + '">' +
+      return card(t(label),'<div class="chart-scale" aria-hidden="true"><span>'+esc(unit(max))+
+        '</span><span>'+esc(unit(0))+'</span></div><div class="chart" role="img" aria-label="' + esc(t(label)+ " · " + period + t(" 天"," days")) + '">' +
         values.map((value,index) => '<div class="chart-col" title="' + esc(sequence[index]+" · "+unit(value)) + '">' +
           (value > 0 ? '<i class="chart-bar" style="--value:' + (value/max*100).toFixed(1) + '%"></i>' : "") + "</div>").join("") +
         '</div><div class="chart-axis"><span>' + esc(date(inDay(sequence[0]))) + "</span><span>" + esc(date(inDay(sequence.at(-1)))) +
@@ -302,25 +328,28 @@
           button(format("近 %d 天","Last %d days",days),{action:"rhythm:stats-period:"+id+":"+days,className:period === days ? "primary" : "secondary"})).join("")});
     }
     const streak = G.state.habitStreaks || {};
-    return shell(header(t("数据统计"),t("回顾连续打卡、专注、睡眠与打卡完成率")) +
+    return shell(header(t("数据统计")) +
       '<div class="grid two">' + tile(streak.current ?? 0,t("当前连续打卡","Current streak"),"bolt","orange")+
       tile(streak.longest ?? 0,t("最长连续打卡","Longest streak"),"check","teal") + "</div>" +
-      series("focus","专注趋势",duration,focusSeconds) +
+      '<div class="rhythm-charts">'+series("focus","专注趋势",duration,focusSeconds) +
       series("sleep","睡眠趋势",duration,key => nightSleep(key)?.durationSeconds || 0) +
       series("habits","打卡完成率",value => value+"%",key => {
         const total = scheduled(key).length;
         return total ? Math.round(countDone(key)*100/total) : 0;
-      }));
+      })+"</div>");
   }
 
   function sleepEditor() {
     const yesterday = day(stepDay(clock(),-1));
-    const preview = '<div class="card stack sleep-preview"><h3>' + L("记录预览","Preview") + '</h3><p data-sleep-window></p><p class="muted small" data-score></p></div>';
-    const form = G.modal(t("记录睡眠"),group(input("hours",t("小时","Hours"),8,{type:"number",min:0,max:24,required:true})+
-      input("minutes",t("分钟","Minutes"),0,{type:"number",min:0,max:59,required:true}))+
+    const preview = '<div class="sleep-preview"><span class="glyph purple">'+icon("moon")+
+      '</span><h3>' + L("记录预览","Preview") +
+      '</h3><strong data-sleep-duration></strong><p data-sleep-window class="muted small"></p><p class="muted small" data-score></p></div>';
+    const form = G.modal(t("补录睡眠","Log sleep"),'<div class="sleep-editor-grid"><div class="stack">'+
       input("night",t("哪一晚","Night"),yesterday,{type:"date",max:today(),required:true})+
+      group(input("hours",t("小时","Hours"),8,{type:"number",min:0,max:24,required:true})+
+      input("minutes",t("分钟","Minutes"),0,{type:"number",min:0,max:59,required:true}))+
       '<p class="muted small">' + L("起床时间为所选夜晚次日 07:00。","Wake time is 07:00 on the morning after the selected date.") +
-      "</p>" + preview,async data => {
+      "</p></div>" + preview+"</div>",async data => {
         const minutes = Number(data.hours)*60+Number(data.minutes);
         if (minutes < 30 || minutes > 1440) throw new Error(t("睡眠时长需在 30 分钟至 24 小时之间，分钟需为 0–59。","Enter a duration between 30 minutes and 24 hours."));
         await G.act("/api/sleep/manual",{night:data.night,minutes},{throw:true});
@@ -330,6 +359,7 @@
       ending.setHours(7);
       const minutes = Number(form.elements.hours.value)*60+Number(form.elements.minutes.value);
       const beginning = new Date(ending.getTime()-minutes*60000);
+      form.querySelector("[data-sleep-duration]").textContent = duration(minutes*60);
       form.querySelector("[data-sleep-window]").textContent = timestamp(beginning) + " – " + timestamp(ending);
       form.querySelector("[data-score]").textContent = format("预计睡眠评分 %d 分","Estimated sleep score %d",Math.max(0,
         Math.min(100,Math.trunc(100-Math.abs(minutes/60-G.state.settings.sleepTargetHours)*18))));

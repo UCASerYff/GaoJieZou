@@ -125,6 +125,10 @@ try {
   const until=expression=>waitFor(()=>js(expression),"Timed out waiting for "+expression);
   const click=selector=>js("document.querySelector("+JSON.stringify(selector)+").click()");
   const key=(selector,value)=>js("document.querySelector("+JSON.stringify(selector)+").dispatchEvent(new KeyboardEvent('keydown',{key:"+JSON.stringify(value)+",bubbles:true,cancelable:true}))");
+  async function nativeKey(key,windowsVirtualKeyCode) {
+    await cdp("Input.dispatchKeyEvent",{type:"rawKeyDown",key,code:key,windowsVirtualKeyCode});
+    await cdp("Input.dispatchKeyEvent",{type:"keyUp",key,code:key,windowsVirtualKeyCode});
+  }
   const canvasMode=mode=>'canvas[data-world-mode="'+mode+'"][data-world-ready=true]';
   const modeReady=mode=>until("Boolean(document.querySelector("+JSON.stringify(canvasMode(mode))+"))");
   const go=section=>js("Gao.go('playground',"+JSON.stringify(section)+")");
@@ -146,6 +150,91 @@ try {
   await cdp("Emulation.setDeviceMetricsOverride",{width:1280,height:840,deviceScaleFactor:1.5,mobile:false});
   await cdp("Page.navigate",{url:base+"/"});
   await until("window.Gao?.state?.status==='ready'");
+
+  assert.equal(await js("Gao.state.version"),"4.12+4");
+  assert.equal(await js("document.querySelector('.navigation-rail [aria-current=page]').dataset.go"),"today");
+  await screenshot("core-today-light");
+  await click('main [data-action="rhythm:focus-start"]');
+  await until("!!Gao.state.library.activeFocus");
+  await click('main [data-action="rhythm:focus-pause"]');
+  await until("Gao.state.library.activeFocus.segmentStartedAt==null");
+  await click('main [data-action="rhythm:focus-resume"]');
+  await until("Gao.state.library.activeFocus.segmentStartedAt!=null");
+  await click('main [data-action="rhythm:focus-finish"]');
+  await until("!Gao.state.library.activeFocus && Gao.state.library.focusRecords.length===1");
+  await click('main [data-action^="rhythm:habit-toggle:"]');
+  await until("Gao.state.library.habitCompletionKeys.length===1");
+
+  await click('main [data-action="rhythm:sleep-entry"]');
+  const setField=(selector,value)=>js("(()=>{const field=document.querySelector("+JSON.stringify(selector)+");field.value="+
+    JSON.stringify(value)+";field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+  await setField("#editor [name=hours]","0");
+  await setField("#editor [name=minutes]","10");
+  await click("#editor [type=submit]");
+  await until("!document.querySelector('.dialog-error').hidden");
+  await screenshot("core-sleep-validation-light");
+  await setField("#editor [name=hours]","7");
+  await setField("#editor [name=minutes]","45");
+  await screenshot("core-sleep-form-light");
+  await click("#editor [type=submit]");
+  await until("!document.querySelector('#editor').open && Gao.state.library.sleepRecords.some(row=>row.manualEntry)");
+  await js("Gao.go('rhythm','focus')");
+  await screenshot("core-focus-light");
+  await js("Gao.go('rhythm','habits')");
+  await screenshot("core-habits-light");
+  async function editorTitle(action,title) {
+    await click(action);
+    await until("document.querySelector('#editor').open");
+    await setField("#editor [name=title]",title);
+    await click("#editor [type=submit]");
+    await until("!document.querySelector('#editor').open");
+  }
+  await click('[data-go="rhythm/chores"]');
+  await editorTitle('[data-action="rhythm:chore-edit"]',"安装回归合成琐事");
+  await until("Gao.state.library.chores.some(row=>row.title==='安装回归合成琐事')");
+  await click('[data-action^="rhythm:chore-toggle:"]');
+  await until("Gao.state.library.chores.some(row=>row.title==='安装回归合成琐事'&&row.isCompleted)");
+  await click('[data-go="rhythm/goals"]');
+  await editorTitle('[data-action="rhythm:goal-edit"]',"安装回归合成目标");
+  await until("Gao.state.library.longGoals.some(row=>row.title==='安装回归合成目标')");
+  const goalID=await js("Gao.state.library.longGoals.find(row=>row.title==='安装回归合成目标').id");
+  await editorTitle('[data-action="rhythm:action-add:'+goalID+'"]',"安装回归合成行动");
+  await until("Gao.state.library.shortActions.some(row=>row.title==='安装回归合成行动'&&row.goalID==="+JSON.stringify(goalID)+")");
+  await click('[data-go="rhythm/actions"]');
+  await click('[data-action="rhythm:action-filter:open"]');
+  assert(await js("document.querySelector('main').textContent.includes('安装回归合成行动')"));
+  await click('[data-go="rhythm/statistics"]');
+  await click('[data-action="rhythm:stats-period:sleep:30"]');
+  assert(await js("Array.from(document.querySelectorAll('.chart')).some(chart=>chart.children.length===30)"));
+
+  // Verify the toolbar emits the native request while the integration installer
+  // separately verifies window creation on an isolated Windows desktop.
+  await js("window.testWidgetCalls=0;const widgetFetch=window.fetch;window.fetch=(url,options)=>{if(url==='/api/platform/widgets'){testWidgetCalls++;return Promise.resolve(Response.json({ok:true}));}return widgetFetch(url,options);};");
+  await click('#rail-actions [data-action="widgets"]');
+  await until("testWidgetCalls===1");
+  await click('#rail-actions [data-action="settings"]');
+  await setField("#editor [name=appearance]","dark");
+  await click("#editor [type=submit]");
+  await until("!document.querySelector('#editor').open && document.documentElement.dataset.theme==='dark'");
+  await cdp("Emulation.setDeviceMetricsOverride",{width:605,height:780,deviceScaleFactor:1.5,mobile:false});
+  await js("Gao.go('today')");
+  assert(await js("document.documentElement.scrollWidth <= innerWidth"),"Small dashboard overflows.");
+  await screenshot("core-today-dark-small");
+  await click("#toolbar .more-button");
+  await click('#toolbar .compact-tools [data-action="settings"]');
+  await screenshot("core-settings-dark-small");
+  await click("#editor [data-close]");
+  await until("!document.querySelector('#editor').open");
+  await js("document.querySelector('.brand').focus()");
+  await nativeKey("Tab",9);
+  assert.equal(await js("document.activeElement.dataset.go"),"today");
+  await nativeKey("ArrowRight",39);
+  assert.equal(await js("document.activeElement.dataset.go"),"rhythm");
+  assert(await js("document.activeElement.matches(':focus-visible')"),"Keyboard destination has no visible focus.");
+  await cdp("Emulation.setDeviceMetricsOverride",{width:1280,height:840,deviceScaleFactor:1.5,mobile:false});
+  await js("Gao.act('/api/settings',{appearance:'light'})");
+  await go("index");
+  await screenshot("core-playground-light");
 
   await js("Gao.go('footprints','map')");
   await until("document.querySelector('#fp-atlas')?.width > 300");
@@ -218,7 +307,7 @@ try {
   assert.equal(await js("!!document.querySelector('.gao-world-canvas')"),false,"3D fallback was not exercised.");
   assert.deepEqual(errors,[]);
   await js('Gao.api("/api/shutdown",{})');
-  console.log("Offline map export and WebGL farm, pasture, fishing, aquarium, island, train, interiors and fallback passed.");
+  console.log("Desktop workbench, focus, check-ins, sleep, chores, goals, linked actions, trends, preferences, widget routing, offline map export and six WebGL scenes passed.");
 } finally {
   await cleanup();
 }

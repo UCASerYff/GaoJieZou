@@ -4,6 +4,8 @@
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
   const ui = {
     scope: "china", selected: null, country: "", province: "", query: "", year: "", trip: "", trainTrip: "",
+    tripQuery: "", tripOrder: "recent", tripSelected: "",
+    timelineQuery: "", timelineYear: "", timelineOrder: "recent", timelinePhotos: false,
     zoom: 1, panX: 0, panY: 0, point: null, atlas: null, atlasPending: null, mapFrame: null,
   };
   const cache = { city: new Map(), photo: new Map() };
@@ -20,8 +22,9 @@
   const text = (...args) => window.Gao.t(...args);
   const escape = value => window.Gao.esc(value ?? "");
   const data = () => window.Gao.state?.footprints;
-  const action = (key, label, value = "", style = "secondary") =>
-    `<button type="button" class="${style}" data-fp-action="${key}" data-fp-value="${escape(value)}">${escape(label)}</button>`;
+  const icon = key => window.Gao.icon(key);
+  const action = (key, label, value = "", style = "secondary", glyph = "") =>
+    `<button type="button" class="${style}" data-fp-action="${key}" data-fp-value="${escape(value)}"${key === "scope" ? ` aria-pressed="${value === ui.scope}"` : ""}>${glyph ? icon(glyph) : ""}${escape(label)}</button>`;
   const option = (value, label, selected = "") =>
     `<option value="${escape(value)}" ${String(value) === String(selected) ? "selected" : ""}>${escape(label)}</option>`;
   const panel = (title, body, css = "") =>
@@ -66,21 +69,22 @@
     ];
   }
   function heading(title, subtitle, buttons = "") {
-    return `<div class="fp-heading"><div><h2>${escape(title)}</h2><p class="muted">${escape(subtitle)}</p></div>${buttons}</div>`;
+    return `<header class="fp-heading"><div><h1>${escape(title)}</h1>${subtitle ? `<p class="muted">${escape(subtitle)}</p>` : ""}</div>${buttons}</header>`;
   }
   function photoTile(id) {
     return `<button type="button" class="fp-photo" data-fp-action="open-photo" data-fp-value="${escape(id)}" aria-label="${escape(text("查看照片", "View photo"))}"><span aria-hidden="true">▧</span><img alt="" data-fp-photo="${escape(id)}" hidden></button>`;
   }
-  function visitRow(visit, withCity = true) {
-    const trip = data().trips.find(item => item.id === visit.tripID);
-    return `<article class="fp-journal-row">
-      <span class="fp-pin" aria-hidden="true">●</span>
-      <div class="fp-journal-text">${withCity ? action("city", cityName(visit.cityID), visit.cityID, "fp-text-button") : ""}
-        <span class="muted">${escape(visitDate(visit))}${trip ? ` · ${escape(trip.name)}` : ""}</span>
+  function visitRow(visit, { withCity = true, withTrip = true } = {}) {
+    const trip = withTrip ? data().trips.find(item => item.id === visit.tripID) : null;
+    return `<article class="fp-journal-row${withCity ? "" : " fp-journal-compact"}" data-fp-visit="${escape(visit.id)}">
+      <span class="fp-journal-time">${escape(visitDate(visit))}</span>
+      <div class="fp-journal-text">
+        ${withCity || trip ? `<div class="fp-journal-title">${withCity ? action("city", cityName(visit.cityID), visit.cityID, "fp-city-link") : ""}
+          ${trip ? `<span class="fp-chip">${escape(trip.name)}</span>` : ""}</div>` : ""}
         ${visit.note ? `<p>${escape(visit.note)}</p>` : ""}
-        ${visit.photoIDs?.length ? `<div class="fp-photo-strip">${visit.photoIDs.map(photoTile).join("")}</div>` : ""}
       </div>
-      <details class="fp-more"><summary aria-label="${escape(text("操作", "Options"))}">···</summary><div>
+      ${visit.photoIDs?.length ? `<div class="fp-photo-strip fp-journal-photos">${visit.photoIDs.map(photoTile).join("")}</div>` : ""}
+      <details class="fp-more"><summary aria-label="${escape(text("足迹操作", "Visit actions"))}">${icon("more")}</summary><div>
         ${action("edit-visit", text("编辑足迹", "Edit footprint"), visit.id)}
         ${action("delete-visit", text("删除足迹", "Delete footprint"), visit.id, "danger")}
       </div></details>
@@ -88,95 +92,196 @@
   }
   function mapSide() {
     if (ui.query || ui.country || ui.province) {
-      return panel(ui.province || (ui.country ? countryName(ui.country) : text("寻找一个地方", "Find a place")),
+      return panel(ui.province || (ui.country ? countryName(ui.country) : text("搜索结果", "Search results")),
         `<div id="fp-map-results" class="fp-city-results" aria-live="polite"></div>
-         <p class="muted">${escape(text("显示前 80 个结果", "Showing up to 80 results"))}</p>
-         <div class="row">${action("new-place", text("找不到？添加地点", "Add a place"))}
+         <div class="fp-map-result-actions row">${action("new-place", text("添加自定义地点", "Add a custom place"), "", "secondary", "plus")}
            ${ui.country || ui.province ? action("clear-country", text("关闭区域", "Close region")) : ""}</div>`, "fp-atlas-side");
     }
     const selected = cityByID(ui.selected);
     if (selected) {
       const visits = sortVisits(data().visits.filter(visit => visit.cityID === selected.id));
       const home = data().residentCityID === selected.id;
+      const photos = new Set(visits.flatMap(visit => visit.photoIDs || [])).size;
       return panel("", `<div class="fp-city-heading"><div><h3>${escape(selected.name)}</h3>
-        <p class="muted">${escape(cityLocation(selected))}</p></div>${action("clear-city", "×", "", "fp-square")}</div>
-        <div class="row">${action("new-visit", text("我去过这里", "I've been here"), selected.id, "primary")}
-          ${action("direct-resident", home ? text("清除常驻", "Clear home city") : text("设为常驻", "Set as home"), home ? "" : selected.id)}</div>
-        <p class="muted">${escape(`${Number(selected.latitude).toFixed(2)}°, ${Number(selected.longitude).toFixed(2)}°`)}</p>
-        ${visits.length ? visits.map(visit => visitRow(visit, false)).join("") : empty(text("尚未留下足迹", "No visits recorded"))}`, "fp-atlas-side");
+        <p class="muted">${escape(cityLocation(selected))}</p></div>
+        <button type="button" class="fp-square plain" data-fp-action="clear-city" aria-label="${escape(text("关闭地点详情", "Close place details"))}">×</button></div>
+        <div class="fp-city-meta">${home ? `<span class="fp-chip">${icon("home")}${escape(text("常驻城市", "Home city"))}</span>` : ""}
+          <span class="muted">${escape(`${Number(selected.latitude).toFixed(2)}°, ${Number(selected.longitude).toFixed(2)}°`)}</span></div>
+        <div class="row">${action("new-visit", text("记录到访", "Record visit"), selected.id, "primary", "plus")}
+          ${action("direct-resident", home ? text("取消常驻", "Clear home city") : text("设为常驻", "Set as home"), home ? "" : selected.id)}</div>
+        <div class="fp-detail-head"><h4>${escape(text("到访记录", "Visits"))}</h4><span class="muted">${escape(text(`${visits.length} 次 · ${photos} 张照片`, `${visits.length} visits · ${photos} photos`))}</span></div>
+        ${visits.length ? visits.map(visit => visitRow(visit, { withCity: false })).join("") : empty(text("尚未留下足迹", "No visits recorded"))}`, "fp-atlas-side");
     }
-    const recent = [...data().visits].sort((a, b) => b.createdAt - a.createdAt).slice(0, 4);
-    return panel(text("田野笔记", "Field notes"),
-      `<h3>${escape(recent.length ? text("每颗图钉，都有一段故事。", "Every pin has a story.") :
-        text("第一颗图钉，留给哪里？", "Where will your first pin go?"))}</h3>
-       ${recent.length ? recent.map(visit => `<div class="fp-recent">${action("city", cityName(visit.cityID), visit.cityID, "fp-text-button")}
-         <span class="muted">${escape(visitDate(visit))}</span></div>`).join("") :
-        action("new-visit", text("写下第一个足迹", "Write your first footprint"))}`, "fp-atlas-side");
+    const recent = sortVisits(data().visits).slice(0, 5);
+    const home = data().residentCity;
+    return panel("", `${home ? `<div class="fp-home-shortcut">
+        <span class="fp-home-icon">${icon("home")}</span>
+        <div><span class="muted">${escape(text("常驻城市", "Home city"))}</span>${action("city", home.name, home.id, "fp-city-link")}</div>
+        ${action("resident-page", text("管理", "Manage"), "", "fp-text-button")}
+      </div>` : ""}
+      <div class="fp-detail-head"><h3>${escape(text("最近到访", "Recent visits"))}</h3>
+      ${recent.length ? action("timeline", text("查看全部", "See all"), "", "fp-text-button") : ""}</div>
+      ${recent.length ? recent.map(visit => `<div class="fp-recent">${action("city", cityName(visit.cityID), visit.cityID, "fp-city-link")}
+        <span class="muted">${escape(visitDate(visit))}</span></div>`).join("") :
+        `${empty(text("尚未记录到访。", "No visits recorded."))}${action("new-visit", text("记录到访", "Record visit"), "", "secondary", "plus")}`}`, "fp-atlas-side");
   }
   function renderMap() {
     const places = mapPlaces();
     const filter = ui.trip ? data().trips.find(trip => trip.id === ui.trip) : null;
-    return `<section class="fp-workspace">
-      ${heading(text("走过的地方，都算数。", "Every place you’ve been counts."), text("不赶路，不打卡。把记忆，一点一点留在地图上。", "Keep your memories on a map, one at a time."),
-      action("new-visit", text("点亮一个地方", "Light up a place"), "", "primary"))}
+    return `<section class="fp-workspace fp-map-workspace">
+      ${heading(text("足迹地图", "Footprint atlas"), "", action("new-visit", text("记录到访", "Record visit"), "", "primary", "plus"))}
       ${numberCards(metricSet(places))}
-      <div class="fp-map-toolbar">
-        <div class="fp-map-scopes" aria-label="${escape(text("地图范围", "Map coverage"))}">
-          ${action("scope", text("中国", "China"), "china", ui.scope === "china" ? "active" : "")}
-          ${action("scope", text("世界", "World"), "world", ui.scope === "world" ? "active" : "")}
-        </div>
-        <input id="fp-map-search" type="search" value="${escape(ui.query)}" placeholder="${escape(text("搜索城市、中英文或拼音", "Search by city name or pinyin"))}" aria-label="${escape(text("搜索地点", "Search places"))}">
-        <select id="fp-map-year" aria-label="${escape(text("年份", "Year"))}">
-          ${option("", text("一生足迹", "All years"), ui.year)}${data().years.map(year => option(year, text(`${year} 年`, String(year)), ui.year)).join("")}
-        </select>
-        ${filter ? `<span class="fp-chip">${escape(filter.name)}</span>` : ""}
-        ${ui.year || ui.trip ? action("clear-filters", text("清除筛选", "Clear filters")) : ""}
-        ${action("export", text("导出地图", "Export map"))}
-      </div>
       <div class="fp-atlas-grid">
-        <div class="fp-map-region">
-          <canvas id="fp-atlas" aria-label="${escape(text("足迹离线地图，使用搜索查找地点", "Offline atlas. Use search to find a place."))}"></canvas>
-          <div id="fp-map-status" class="fp-map-status" aria-live="polite"></div>
-          <div class="fp-map-controls" aria-label="${escape(text("缩放", "Zoom"))}">
-            ${action("zoom", "＋", "in", "fp-square")}${action("zoom", "－", "out", "fp-square")}
-            <button type="button" data-fp-action="zoom" data-fp-value="reset" class="fp-square" aria-label="${escape(text("重置地图", "Reset map"))}">⌖</button>
+        <section class="fp-map-card" aria-label="${escape(text("离线地图", "Offline map"))}">
+          <div class="fp-map-toolbar">
+            <div class="fp-map-scopes" aria-label="${escape(text("地图范围", "Map coverage"))}">
+              ${action("scope", text("中国", "China"), "china", ui.scope === "china" ? "active" : "")}
+              ${action("scope", text("世界", "World"), "world", ui.scope === "world" ? "active" : "")}
+            </div>
+            <select id="fp-map-year" aria-label="${escape(text("年份", "Year"))}">
+              ${option("", text("全部年份", "All years"), ui.year)}${data().years.map(year => option(year, text(`${year} 年`, String(year)), ui.year)).join("")}
+            </select>
+            ${filter ? `<span class="fp-chip">${escape(filter.name)}</span>` : ""}
+            ${ui.year || ui.trip ? action("clear-filters", text("清除", "Clear"), "", "fp-text-button") : ""}
+            ${action("export", text("导出 PNG", "Export PNG"), "", "secondary", "download")}
           </div>
-        </div>
-        <aside id="fp-map-side">${mapSide()}</aside>
+          <div class="fp-map-region">
+            <canvas id="fp-atlas" aria-label="${escape(text("足迹离线地图，使用搜索查找地点", "Offline atlas. Use search to find a place."))}"></canvas>
+            <div id="fp-map-status" class="fp-map-status" aria-live="polite"></div>
+            <div class="fp-map-controls" aria-label="${escape(text("缩放", "Zoom"))}">
+              <button type="button" data-fp-action="zoom" data-fp-value="in" class="fp-square" aria-label="${escape(text("放大地图", "Zoom in"))}">＋</button>
+              <button type="button" data-fp-action="zoom" data-fp-value="out" class="fp-square" aria-label="${escape(text("缩小地图", "Zoom out"))}">－</button>
+              <button type="button" data-fp-action="zoom" data-fp-value="reset" class="fp-square" aria-label="${escape(text("重置地图", "Reset map"))}">⌖</button>
+            </div>
+          </div>
+          <p class="fp-map-hint muted">${escape(text("拖动平移 · 滚轮缩放 · 点击区域查看", "Drag to pan · Scroll to zoom · Select a region"))}</p>
+        </section>
+        <aside class="fp-map-browser" aria-label="${escape(text("地点浏览", "Place browser"))}">
+          <div class="fp-browser-heading"><h2>${escape(text("地点", "Places"))}</h2>
+            <input id="fp-map-search" type="search" value="${escape(ui.query)}" placeholder="${escape(text("城市名或拼音", "City name or pinyin"))}" aria-label="${escape(text("搜索地点", "Search places"))}"></div>
+          <div id="fp-map-side">${mapSide()}</div>
+        </aside>
       </div>
-      <p class="fp-map-hint muted">${escape(text("拖动平移 · 滚轮缩放 · 点击区域查看 · 地图资料保存在这台电脑", "Drag to pan · Wheel to zoom · Select a region · Map data stays on this computer"))}</p>
     </section>`;
   }
+  const searchKey = value => String(value || "").normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, "");
+
+  function tripEntries() {
+    const groups = new Map(data().trips.map(trip => [trip.id, []]));
+    for (const visit of data().visits) groups.get(visit.tripID)?.push(visit);
+    const query = searchKey(ui.tripQuery);
+    const entries = data().trips.map(trip => ({ trip, visits: sortVisits(groups.get(trip.id)) }))
+      .filter(({ trip, visits }) => searchKey([trip.name, trip.note, ...visits.map(visit => cityName(visit.cityID))].join(" ")).includes(query));
+    const collator = new Intl.Collator(window.Gao.locale(), { numeric: true });
+    return entries.sort((a, b) => {
+      if (ui.tripOrder === "name") return collator.compare(a.trip.name, b.trip.name);
+      if (ui.tripOrder === "created") return b.trip.createdAt - a.trip.createdAt;
+      return visitKey(b.visits[0] || {}) - visitKey(a.visits[0] || {}) || b.trip.createdAt - a.trip.createdAt;
+    });
+  }
+
+  function tripDetail(selected) {
+    if (!selected) return empty(ui.tripQuery ? text("没有匹配的旅行。", "No trips match your search.") :
+      text("新建旅行，把相关的到访记录放在一起。", "Create a trip to group related visits."));
+    const { trip, visits } = selected;
+    const cities = new Set(visits.map(visit => visit.cityID)).size;
+    const photos = new Set(visits.flatMap(visit => visit.photoIDs || []));
+    const cover = photos.values().next().value;
+    return `<div class="fp-trip-head">
+      ${cover ? photoTile(cover) : `<span class="fp-trip-cover">${icon("case")}</span>`}
+      <div><h2>${escape(trip.name)}</h2><p class="muted">${escape(text(`${cities} 座城市 · ${visits.length} 次到访 · ${photos.size} 张照片`,
+          `${cities} cities · ${visits.length} visits · ${photos.size} photos`))}</p></div>
+      <details class="fp-more"><summary aria-label="${escape(text("旅行操作", "Trip actions"))}">${icon("more")}</summary><div>
+        ${action("edit-trip", text("编辑旅行", "Edit trip"), trip.id, "secondary", "edit")}
+        ${action("delete-trip", text("删除旅行", "Delete trip"), trip.id, "danger", "trash")}
+      </div></details></div>
+      ${trip.note ? `<p class="fp-trip-note">${escape(trip.note)}</p>` : ""}
+      <div class="row fp-trip-actions">${action("trip-map", text("查看地图", "View on map"), trip.id, "secondary", "map")}
+        ${action("trip-visit", text("记录到访", "Record visit"), trip.id, "secondary", "plus")}</div>
+      <div class="fp-detail-head"><h3>${escape(text("到访记录", "Visits"))}</h3></div>
+      ${visits.length ? visits.map(visit => visitRow(visit, { withTrip: false })).join("") : empty(text("还没有关联到访", "No linked visits"))}`;
+  }
+
+  function tripBrowser() {
+    const entries = tripEntries();
+    const selected = entries.find(entry => entry.trip.id === ui.tripSelected) || entries[0];
+    if (!selected) return { list: empty(text("没有旅行可显示。", "No trips to show.")), detail: tripDetail() };
+    const list = entries.map(({ trip, visits }) => `<button type="button" class="fp-trip-pick"
+      data-fp-action="trip-select" data-fp-value="${escape(trip.id)}"${trip.id === selected.trip.id ? ' aria-current="true"' : ""}>
+      <span><strong>${escape(trip.name)}</strong><small>${visits.length ? escape(visitDate(visits[0])) : escape(text("暂无到访", "No visits"))}</small></span>
+      <span class="fp-trip-count" aria-label="${escape(text(`${visits.length} 次到访`, `${visits.length} visits`))}">${visits.length}</span>
+      ${icon("right")}</button>`).join("");
+    return { list, detail: tripDetail(selected) };
+  }
+
   function renderTrips() {
-    const trips = [...data().trips].sort((a, b) => b.createdAt - a.createdAt);
-    return `<section class="fp-workspace">${heading(text("旅行手记", "Travel journals"), text("把同一次走过的地方，整理成一段旅程。", "Group visits from the same journey."),
-      action("new-trip", text("新建旅行", "New trip"), "", "primary"))}
-      ${trips.length ? trips.map(trip => {
-        const visits = sortVisits(data().visits.filter(visit => visit.tripID === trip.id));
-        const count = new Set(visits.map(visit => visit.cityID)).size;
-        const photo = visits.find(visit => visit.photoIDs?.length)?.photoIDs[0];
-        return panel("", `<div class="fp-trip-head">${photo ? photoTile(photo) : `<span class="fp-carriage-icon" aria-hidden="true">▣</span>`}
-          <div><h3>${escape(trip.name)}</h3><p class="muted">${escape(text(`${count} 座城市 · ${visits.length} 次到访`, `${count} cities · ${visits.length} visits`))}</p></div>
-          <div class="row">${action("edit-trip", text("编辑旅行", "Edit trip"), trip.id)}${action("delete-trip", text("删除旅行", "Delete trip"), trip.id, "danger")}</div></div>
-          ${trip.note ? `<p>${escape(trip.note)}</p>` : ""}
-          <div class="row">${action("trip-map", text("在地图查看", "View on map"), trip.id)}
-            ${action("trip-visit", text("记录到访", "Record a visit"), trip.id)}</div>
-          ${visits.length ? visits.map(visit => visitRow(visit)).join("") : empty(text("还没有关联到访", "No linked visits"))}`, "fp-trip");
-      }).join("") : panel("", empty(text("你可以为下一段旅程建立一份旅行手记。", "Create a journal for your next trip.")))}
+    const browser = tripBrowser();
+    return `<section class="fp-workspace fp-trip-workspace">${heading(text("旅行", "Trips"), "",
+      action("new-trip", text("新建旅行", "New trip"), "", "primary", "plus"))}
+      <div class="fp-trip-layout">
+        <aside class="fp-panel fp-trip-index">
+          <div class="fp-detail-head"><h2>${escape(text("旅行手记", "Travel journals"))}</h2><span>${data().trips.length}</span></div>
+          <input id="fp-trip-search" type="search" value="${escape(ui.tripQuery)}" placeholder="${escape(text("搜索旅行", "Search trips"))}" aria-label="${escape(text("搜索旅行", "Search trips"))}">
+          <select id="fp-trip-order" aria-label="${escape(text("旅行排序", "Trip order"))}">
+            ${option("recent", text("最近到访", "Latest visit"), ui.tripOrder)}
+            ${option("created", text("最近创建", "Recently created"), ui.tripOrder)}
+            ${option("name", text("按名称", "Name"), ui.tripOrder)}
+          </select>
+          <div id="fp-trip-list" class="fp-trip-list">${browser.list}</div>
+        </aside>
+        <section id="fp-trip-detail" class="fp-panel fp-trip-detail" aria-label="${escape(text("旅行详情", "Trip details"))}">${browser.detail}</section>
+      </div>
     </section>`;
   }
-  function renderTimeline() {
+
+  function timelineResults() {
+    const query = searchKey(ui.timelineQuery);
+    const trips = new Map(data().trips.map(trip => [trip.id, trip.name]));
+    const visits = data().visits.filter(visit => {
+      const city = cityByID(visit.cityID);
+      const match = searchKey([city?.name, city?.english, city?.pinyin, visit.note, trips.get(visit.tripID)].join(" ")).includes(query);
+      const year = visit.date?.year;
+      return match && (!ui.timelineYear || (year ? String(year) === ui.timelineYear : ui.timelineYear === "unknown")) &&
+        (!ui.timelinePhotos || visit.photoIDs?.length > 0);
+    });
+    const ordered = sortVisits(visits);
+    if (ui.timelineOrder === "earliest") {
+      ordered.sort((a, b) => (visitKey(a) || Infinity) - (visitKey(b) || Infinity));
+    }
     const groups = new Map();
-    for (const visit of sortVisits(data().visits)) {
+    for (const visit of ordered) {
       const key = visit.date?.year || 0;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(visit);
     }
-    const cards = [...groups].map(([year, visits]) => panel(year ? text(`${year} 年`, String(year)) : text("时间未详", "Date unknown"),
-      visits.map(visit => visitRow(visit)).join("")));
-    return `<section class="fp-workspace">${heading(text("足迹时间轴", "Footprint timeline"), text("按到访时间回顾走过的地方。", "Revisit the places you've been in chronological order."),
-      action("new-visit", text("记录到访", "Record visit"), "", "primary"))}
-      ${cards.length ? cards.join("") : panel("", empty(text("这里会显示你留下的到访记录。", "Your recorded visits will appear here.")))}</section>`;
+    const cards = [...groups].map(([year, group]) => `<section class="fp-timeline-year"><div class="fp-timeline-year-heading">
+      <h2>${escape(year ? text(`${year} 年`, String(year)) : text("时间未详", "Date unknown"))}</h2>
+      <span class="muted">${escape(text(`${group.length} 次到访`, `${group.length} visits`))}</span></div>
+      ${group.map(visit => visitRow(visit)).join("")}</section>`);
+    return `<div class="fp-timeline-total muted">${escape(text(`显示 ${visits.length} 条到访记录`, `Showing ${visits.length} visits`))}</div>
+      ${cards.length ? cards.join("") : empty(text("没有找到符合条件的到访记录。", "No visits match these filters."))}`;
+  }
+
+  function renderTimeline() {
+    const years = data().years.map(year => option(year, text(`${year} 年`, String(year)), ui.timelineYear)).join("");
+    return `<section class="fp-workspace fp-timeline-workspace">${heading(text("足迹时间轴", "Footprint timeline"), "",
+        action("new-visit", text("记录到访", "Record visit"), "", "primary", "plus"))}
+      <div class="fp-timeline-stream fp-panel">
+        <div class="fp-history-controls">
+          <input id="fp-timeline-search" type="search" value="${escape(ui.timelineQuery)}" placeholder="${escape(text("搜索城市、旅行或笔记", "Search places, trips, or notes"))}" aria-label="${escape(text("搜索到访记录", "Search visits"))}">
+          <select id="fp-timeline-year" aria-label="${escape(text("年份", "Year"))}">
+            ${option("", text("全部年份", "All years"), ui.timelineYear)}${years}
+            ${option("unknown", text("时间未详", "Date unknown"), ui.timelineYear)}
+          </select>
+          <select id="fp-timeline-order" aria-label="${escape(text("到访排序", "Visit order"))}">
+            ${option("recent", text("由新到旧", "Newest first"), ui.timelineOrder)}
+            ${option("earliest", text("由旧到新", "Oldest first"), ui.timelineOrder)}
+          </select>
+          <label class="fp-filter-check"><input id="fp-timeline-photos" type="checkbox"${ui.timelinePhotos ? " checked" : ""}>${escape(text("有照片", "With photos"))}</label>
+        </div>
+        <div id="fp-timeline-results" class="fp-timeline-results" aria-live="polite">${timelineResults()}</div>
+      </div>
+    </section>`;
   }
   function renderResident() {
     const city = data().residentCity;
@@ -194,9 +299,8 @@
   }
   function actions(section) {
     if (!data()?.available || section === "train") return "";
-    return `${action("new-visit", text("点亮一个地方", "Light up a place"), "", "fp-text-button")}
-      ${action("resident-page", text("常驻城市", "Home city"), "", "fp-text-button")}
-      ${action("settings", text("足迹设置", "Footprint settings"), "", "fp-text-button")}
+    return `${action("resident-page", text("常驻城市", "Home city"), "", "fp-text-button", "home")}
+      ${action("settings", text("足迹设置", "Footprint settings"), "", "fp-text-button", "settings")}
       ${data().undoAvailable ? action("undo", text("撤销", "Undo"), "", "fp-text-button") : ""}`;
   }
   function renderTrain() {
@@ -215,32 +319,48 @@
       return `<span class="fp-train-car" draggable="true" data-fp-drag="${key}" title="${escape(text(chinese, english))}">${symbol}</span>`;
     });
     const memories = [...new Set(orderedVisits.flatMap(visit => visit.photoIDs || []))].slice(0, 8);
-    return `<section class="fp-workspace">
-      ${heading(text("旅行列车", "Travel train"), text("真实足迹铺成线路，旅途回忆装满车厢。", "Real visits make routes, and travel memories fill the cars."),
-        `<span class="fp-chip">${escape(text(`${train.materials} 旅途物资`, `${train.materials} supplies`))}</span>`)}
-      <div class="fp-train-world" hidden></div>
-      <div class="fp-train-scene"><div class="fp-train-track" aria-hidden="true"></div>
-        <div class="fp-train-consist" aria-label="${escape(text("当前车厢", "Current cars"))}"><span class="fp-engine" aria-label="${escape(text("车头", "Engine"))}">◆</span>
-        ${visualCars.join("")}</div></div>
-      <div class="fp-train-columns">
-        ${panel(text("虚拟巡游", "Virtual cruise"), `<p>${escape(text("当前位置", "Current station"))} · ${escape(train.currentStation?.name || "—")}</p>
-          ${moving ? `<p class="muted">${escape(journey.origin.name)} → ${escape(journey.destination.name)}</p><progress id="fp-train-progress" max="1" value="0"></progress><p class="muted" id="fp-train-countdown"></p>` :
-          `<div class="row"><select id="fp-train-destination" aria-label="${escape(text("巡游目的地", "Cruise destination"))}" ${destinations.length ? "" : "disabled"}>
-          ${option("", text("选择下一站", "Choose a station"), train.routeCityID)}${destinations.map(city => option(city.id, city.name, train.routeCityID)).join("")}
-          </select><button type="button" class="primary" data-fp-action="depart" ${destinations.length && train.routeCityID ? "" : "disabled"}>${escape(text("发车", "Depart"))}</button></div>`}
-          ${!destinations.length && !moving ? empty(text("记录两座到访城市后即可巡游。", "Record two visited cities to start a cruise.")) : ""}`)}
-        ${panel(text("旅途图鉴", "Travel collection"), numberCards([[data().plotted.length, text("车站", "Stations")],
-          [train.claimedTripIDs?.length || 0, text("旅行册", "Trips")], [train.claimedPhotoIDs?.length || 0, text("照片", "Photos")],
-          [train.claimedNoteIDs?.length || 0, text("回忆", "Notes")]]) +
-          `<p class="muted">${escape(text(`累计 ${train.lifetimeMaterials} 份物资 · 巡游 ${train.cruiseCount} 次`, `${train.lifetimeMaterials} lifetime supplies · ${train.cruiseCount} cruises`))}</p>`)}
+    return `<section class="fp-workspace fp-train-workspace">
+      ${heading(text("旅行列车", "Travel train"), "",
+        `<span class="fp-train-balance">${icon("tray")}<span>${escape(text("可用旅途物资", "Available supplies"))}</span><strong>${train.materials}</strong></span>`)}
+      <div class="fp-train-board">
+        <section class="fp-train-view" aria-label="${escape(text("列车场景", "Train scene"))}">
+          <div class="fp-train-world" hidden></div>
+          <div class="fp-train-scene"><div class="fp-train-track" aria-hidden="true"></div>
+            <div class="fp-train-consist" aria-label="${escape(text("当前车厢", "Current cars"))}"><span class="fp-engine" aria-label="${escape(text("车头", "Engine"))}">◆</span>
+            ${visualCars.join("")}</div></div>
+        </section>
+        <aside class="fp-panel fp-train-operations">
+          <div class="fp-detail-head"><h2>${escape(text("巡游调度", "Cruise controls"))}</h2></div>
+          <div class="fp-train-station-now">
+            <span class="fp-home-icon">${icon("train")}</span>
+            <div><span class="muted">${escape(text("当前位置", "Current station"))}</span><strong>${escape(train.currentStation?.name || "—")}</strong></div>
+          </div>
+          ${moving ? `<div class="fp-train-moving"><p>${escape(journey.origin.name)} → ${escape(journey.destination.name)}</p>
+            <progress id="fp-train-progress" max="1" value="0" aria-label="${escape(text("巡游进度", "Cruise progress"))}"></progress><p class="muted" id="fp-train-countdown"></p></div>` :
+            `<label class="fp-train-departure"><span>${escape(text("下一站", "Next station"))}</span><select id="fp-train-destination" aria-label="${escape(text("巡游目的地", "Cruise destination"))}" ${destinations.length ? "" : "disabled"}>
+            ${option("", text("选择下一站", "Choose a station"), train.routeCityID)}${destinations.map(city => option(city.id, city.name, train.routeCityID)).join("")}
+            </select></label><button type="button" class="primary" data-fp-action="depart" ${destinations.length && train.routeCityID ? "" : "disabled"}>${icon("play")}${escape(text("发车", "Depart"))}</button>`}
+          ${!destinations.length && !moving ? `<p class="muted">${escape(text("记录两座到访城市后即可巡游。", "Record two visited cities to start a cruise."))}</p>` : ""}
+          <div class="fp-train-collection"><h3>${escape(text("旅途图鉴", "Travel collection"))}</h3>
+            ${numberCards([[data().plotted.length, text("车站", "Stations")],
+              [train.claimedTripIDs?.length || 0, text("旅行", "Trips")], [train.claimedPhotoIDs?.length || 0, text("照片", "Photos")],
+              [train.claimedNoteIDs?.length || 0, text("回忆", "Notes")]])}
+            <p class="muted">${escape(text(`累计 ${train.lifetimeMaterials} 份物资 · 巡游 ${train.cruiseCount} 次`, `${train.lifetimeMaterials} lifetime supplies · ${train.cruiseCount} cruises`))}</p>
+          </div>
+        </aside>
       </div>
-      ${journey ? `<div class="fp-map-region fp-train-map"><canvas id="fp-train-atlas" aria-label="${escape(text("巡游路线地图", "Journey route map"))}"></canvas></div>` : ""}
-      ${panel(text("沿途车站", "Stations on the route"), `<select id="fp-train-trip" aria-label="${escape(text("旅行线路", "Trip route"))}">
-        ${option("", text("全部足迹", "All visits"), ui.trainTrip)}${data().trips.map(trip => option(trip.id, trip.name, ui.trainTrip)).join("")}</select>
-        ${stations.size ? `<div class="fp-stations">${[...stations].map(([id, count]) => `<div class="fp-station">${action("city", cityName(id), id, "fp-text-button")}
+      <section class="fp-panel fp-train-route">
+        <div class="fp-detail-head"><h2>${escape(text("沿途车站", "Stations on the route"))}</h2>
+          <select id="fp-train-trip" aria-label="${escape(text("旅行线路", "Trip route"))}">
+            ${option("", text("全部足迹", "All visits"), ui.trainTrip)}${data().trips.map(trip => option(trip.id, trip.name, ui.trainTrip)).join("")}
+          </select></div>
+        ${journey ? `<div class="fp-map-region fp-train-map"><canvas id="fp-train-atlas" aria-label="${escape(text("巡游路线地图", "Journey route map"))}"></canvas></div>` : ""}
+        ${stations.size ? `<div class="fp-stations">${[...stations].map(([id, count]) => `<div class="fp-station">${action("city", cityName(id), id, "fp-city-link")}
           <small>${escape(text(`${count} 次到访 · ${Math.min(count, 3)} 级站`, `${count} visits · Level ${Math.min(count, 3)}`))}</small></div>`).join("")}</div>` :
-        empty(text("添加第一条足迹后，列车就有第一座车站。", "Add a footprint to unlock your first station."))}`)}
-      <h3>${escape(text("列车改装", "Upgrade your train"))}</h3>
+        empty(text("添加第一条足迹后，列车就有第一座车站。", "Add a footprint to unlock your first station."))}
+      </section>
+      <div class="fp-detail-head fp-carriages-head"><h2>${escape(text("列车改装", "Upgrade your train"))}</h2>
+        <span class="muted">${escape(text(`${order.length} / ${carriageRows.length} 节车厢已建造`, `${order.length} / ${carriageRows.length} cars built`))}</span></div>
       <div class="fp-carriages">${carriageRows.map(([key, symbol, chinese, english, effectCN, effectEN]) => {
         const level = levels[key] || 0;
         const cost = [6, 12, 20, 30][level];
@@ -674,7 +794,7 @@
     const home = data().residentCity;
     const selected = output ? null : cityByID(ui.selected);
     const pins = places.filter(city => city.id !== home?.id).map(city => ({ city, opts: {} }));
-    if (!journey && selected && !pins.some(item => item.city.id === selected.id)) {
+    if (!journey && selected && selected.id !== home?.id && !pins.some(item => item.city.id === selected.id)) {
       pins.push({ city: selected, opts: { outline: true } });
     }
     if (!journey && home) pins.unshift({ city: home, opts: { home: true } });
@@ -1058,26 +1178,37 @@
     const trips = [["", text("不归入旅行", "No trip")], ["new", text("新建旅行", "New trip")],
       ...data().trips.map(trip => [trip.id, trip.name])];
     const title = visit ? text("编辑足迹", "Edit footprint") : text("记录到访", "Record a visit");
-    const form = window.Gao.modal(title, `<div class="fp-editor">
-      <section class="fp-editor-group"><h3>${escape(text("地点", "Places"))}</h3>
-      <input id="fp-editor-search" type="search" placeholder="${escape(text("搜索城市、中英文或拼音", "Search by city name or pinyin"))}">
-      <div id="fp-selected-cities" class="row fp-chip-list" aria-live="polite"></div><div id="fp-editor-results" class="fp-city-results"></div></section>
+    const form = window.Gao.modal(title, `<div class="fp-editor fp-visit-editor">
+      <section class="fp-editor-group fp-visit-places">
+        <div class="fp-detail-head"><h3>${escape(text("地点", "Places"))}</h3>${visit ? "" :
+          `<span class="muted">${escape(text("可多选", "Multiple allowed"))}</span>`}</div>
+        <input id="fp-editor-search" type="search" placeholder="${escape(text("城市名或拼音", "City name or pinyin"))}" aria-label="${escape(text("搜索地点", "Search places"))}">
+        <div id="fp-selected-cities" class="row fp-chip-list" aria-live="polite"></div>
+        <div id="fp-editor-results" class="fp-city-results"></div>
+      </section>
+      <div class="fp-visit-details">
       <section class="fp-editor-group"><h3>${escape(text("到访时间与旅行", "Visit time and trip"))}</h3>
+        <div class="fp-visit-date-fields">
         ${select("precision", text("日期精度", "Date precision"), [
           ["unknown", text("记不清", "Can't recall")], ["year", text("只记得年份", "Year only")],
           ["month", text("记得月份", "Year and month")], ["day", text("具体日期", "Exact date")]], date.precision || "unknown")}
+        ${select("tripID", text("所属旅行", "Trip"), trips, visit?.tripID || presetTrip)}
+        </div>
         <div class="fp-form-columns" id="fp-date-fields">
           ${input("year", text("年", "Year"), date.year || now.getFullYear(), { type: "number", min: 1, max: now.getFullYear() })}
           ${input("month", text("月", "Month"), date.month || now.getMonth() + 1, { type: "number", min: 1, max: 12 })}
           ${input("day", text("日", "Day"), date.day || now.getDate(), { type: "number", min: 1, max: 31 })}</div>
-        ${select("tripID", text("所属旅行", "Trip"), trips, visit?.tripID || presetTrip)}
         ${input("newTripName", text("旅行名称", "Trip name"), "")}</section>
       <section class="fp-editor-group"><h3>${escape(text("笔记与照片", "Notes and photos"))}</h3>
-        ${textarea("note", text("回忆", "Memory"), visit?.note || "")}
-        <label>${escape(text("添加照片", "Add photos"))}<input id="fp-new-photos" type="file" accept="image/jpeg,image/png,image/heic,.heic,.heif" multiple></label>
-        <p class="muted" id="fp-photo-count"></p><div class="row fp-chip-list" id="fp-photo-chips"></div>
+        ${textarea("note", text("笔记", "Notes"), visit?.note || "")}
+        <div class="fp-attach-row">
+          <label class="fp-file-picker">${icon("plus")}${escape(text("添加照片", "Add photos"))}<input id="fp-new-photos" type="file" accept="image/jpeg,image/png,image/heic,.heic,.heif" aria-label="${escape(text("添加照片", "Add photos"))}" multiple></label>
+          <span class="muted" id="fp-photo-count"></span>
+        </div>
+        <div class="row fp-chip-list" id="fp-photo-chips"></div>
         <div class="fp-photo-strip" id="fp-editor-saved-photos"></div>
-        <p class="muted">${escape(text("照片保存在本机。多城市保存时，共享这次笔记与照片。", "Photos stay on this device. Cities recorded together share these notes and photos."))}</p></section>
+        <p class="muted">${escape(text("照片保存在本机。多城市保存时，共用笔记与照片。", "Photos stay on this device. Cities recorded together share notes and photos."))}</p></section>
+      </div>
       </div>`, async values => {
       if (!selected.size) throw new Error(text("请选择至少一个地点。", "Choose at least one place."));
       if (values.tripID === "new" && !values.newTripName?.trim()) throw new Error(text("请填写旅行名称。", "Enter a trip name."));
@@ -1192,7 +1323,13 @@
       `<div class="fp-editor">${window.Gao.input("name", text("旅行名称", "Trip name"), trip?.name || "", { required: true })}
        ${window.Gao.textarea("note", text("旅行手记", "Travel notes"), trip?.note || "")}</div>`,
       async values => {
-        await commit("trip", trip ? { ...values, id: trip.id } : values, text("旅行已保存", "Trip saved"));
+        const result = await api("trip", trip ? { ...values, id: trip.id } : values);
+        if (!trip) {
+          ui.tripSelected = result.result?.id || "";
+          ui.tripQuery = "";
+        }
+        update();
+        notice(text("旅行已保存", "Trip saved"));
       });
     return form;
   }
@@ -1369,6 +1506,27 @@
     update();
   }
 
+  function refreshTripBrowser(focusSelection = false) {
+    const list = $("#fp-trip-list");
+    const detail = $("#fp-trip-detail");
+    if (!list || !detail) return;
+    const browser = tripBrowser();
+    list.innerHTML = browser.list;
+    detail.innerHTML = browser.detail;
+    bindButtons(list);
+    bindButtons(detail);
+    bindPhotos(detail);
+    if (focusSelection) $("button[aria-current='true']", list)?.focus({ preventScroll: true });
+  }
+
+  function refreshTimeline() {
+    const results = $("#fp-timeline-results");
+    if (!results) return;
+    results.innerHTML = timelineResults();
+    bindButtons(results);
+    bindPhotos(results);
+  }
+
   function bindButtons(root = document) {
     for (const button of $$("[data-fp-action]", root)) {
       if (root === document && button.closest("#editor")) continue;
@@ -1380,6 +1538,7 @@
             case "scope": changeScope(value); break;
             case "zoom": zoomMap(value); break;
             case "search": search(); break;
+            case "timeline": gao.go("footprints", "timeline"); break;
             case "city": showCity(value); break;
             case "clear-city": ui.selected = null; refreshMapSide(); renderAtlas($("#fp-atlas")); break;
             case "clear-country":
@@ -1401,6 +1560,7 @@
                 "/api/footprints/visit/delete", { id: value });
               break;
             case "new-trip": editTrip(); break;
+            case "trip-select": ui.tripSelected = value; refreshTripBrowser(true); break;
             case "edit-trip": {
               const trip = data().trips.find(item => item.id === value);
               if (trip) editTrip(trip);
@@ -1464,6 +1624,14 @@
       $("#fp-map-year").onchange = event => { ui.year = event.target.value; update(); };
       refreshMapSide();
       bindMap();
+    } else if (section === "trips") {
+      $("#fp-trip-search").oninput = event => { ui.tripQuery = event.target.value; refreshTripBrowser(); };
+      $("#fp-trip-order").onchange = event => { ui.tripOrder = event.target.value; refreshTripBrowser(); };
+    } else if (section === "timeline") {
+      $("#fp-timeline-search").oninput = event => { ui.timelineQuery = event.target.value; refreshTimeline(); };
+      $("#fp-timeline-year").onchange = event => { ui.timelineYear = event.target.value; refreshTimeline(); };
+      $("#fp-timeline-order").onchange = event => { ui.timelineOrder = event.target.value; refreshTimeline(); };
+      $("#fp-timeline-photos").onchange = event => { ui.timelinePhotos = event.target.checked; refreshTimeline(); };
     } else if (section === "train") {
       bindTrain();
       window.TrainWorld?.mount();

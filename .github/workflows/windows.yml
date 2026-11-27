@@ -20,7 +20,7 @@ jobs:
         run: .\build.ps1
       - name: Install, smoke-test and uninstall
         run: |
-          $installer = Get-ChildItem ..\dist\GaoJieZou-*-Windows-x64.msi -File
+          $installer = Get-ChildItem ..\dist\GaoJieZou-*+*-Windows-x64.msi -File
           if (@($installer).Count -ne 1) { throw "Expected one Windows Installer package." }
           .\smoke-install.ps1 -Package $installer.FullName -CheckShell
       - uses: actions/upload-artifact@v4
@@ -28,5 +28,5 @@ jobs:
           name: GaoJieZou-Windows-x64
           if-no-files-found: error
           path: |
-            dist/GaoJieZou-*-Windows-x64.msi
-            dist/GaoJieZou-*-Windows-x64.msi.sha256
+            dist/GaoJieZou-*+*-Windows-x64.msi
+            dist/GaoJieZou-*+*-Windows-x64.msi.sha256

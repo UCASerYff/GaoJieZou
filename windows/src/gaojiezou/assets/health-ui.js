@@ -55,8 +55,10 @@
   const formFields = (form) => Object.fromEntries(new FormData(form));
   const byNewest = (rows, key = "occurredAt") => [...rows].sort((a, b) => b[key] - a[key]);
   const button = (label, action, value = "", options = {}) => `<button type="button"
-    class="${e(options.className || "")}" data-health-action="${e(action)}" data-value="${e(value)}"
-    ${options.disabled ? "disabled" : ""}>${options.icon ? icon(options.icon) : ""}${e(label)}</button>`;
+    class="${e(options.className || "")}${options.iconOnly ? " health-icon-button" : ""}" data-health-action="${e(action)}" data-value="${e(value)}"
+    ${options.title ? `title="${e(options.title)}" aria-label="${e(options.title)}"` : ""}
+    ${options.pressed == null ? "" : `aria-pressed="${options.pressed}"`}
+    ${options.disabled ? "disabled" : ""}>${options.icon ? icon(options.icon) : ""}${options.iconOnly ? "" : e(label)}</button>`;
   const primary = (label, action, value, glyph) => button(label, action, value, { icon: glyph, className: "primary" });
   const caption = (text) => `<p class="health-caption">${e(text)}</p>`;
   const post = (path, body = {}, options) => g().act(api + path, body, options);
@@ -104,7 +106,7 @@
     const pages = { overview, events, trends, island };
     const color = String(h().preferences.backgroundHex || "").replace(/^#/, "");
     const custom = /^[\da-f]{6}$/i.test(color) ? ` style="--health-tint:#${color}"` : "";
-    return `<div class="health-content" data-health-theme="${e(h().preferences.appearance || "system")}"${custom}>${pages[section] ? pages[section]() : recordsPage(section)}</div>`;
+    return `<div class="health-content" data-health-page="${e(section)}" data-health-theme="${e(h().preferences.appearance || "system")}"${custom}>${pages[section] ? pages[section]() : recordsPage(section)}</div>`;
   }
 
   function recordValue(row) {
@@ -121,29 +123,48 @@
       <span class="health-value">${e(value)}</span><div class="health-controls">${controls || ""}</div></div>`;
   }
 
-  function normalRow(record) {
-    return row(record.title || kindName(record.kind), [dateTime(record.occurredAt), record.note].filter(Boolean).join(" · "),
-      recordValue(record), button(t("编辑", "Edit"), "record-edit", record.id, { icon: "pencil" })
-      + button(t("删除", "Delete"), "record-delete", record.id, { icon: "trash" }),
-      KINDS[record.kind]?.[2], KINDS[record.kind]?.[3]);
+  function recordTable(records, label) {
+    const tableRows = records.map((record) => {
+      const kind = KINDS[record.kind];
+      const name = record.title || kindName(record.kind);
+      return `<tr><th scope="row"><div class="health-log-entry">
+        <span class="health-glyph" data-color="${e(kind?.[3] || "teal")}">${icon(kind?.[2] || "list")}</span>
+        <span class="health-log-copy"><strong>${e(name)}</strong>
+        <small>${e([name === kindName(record.kind) ? "" : kindName(record.kind), record.note].filter(Boolean).join(" · "))}</small></span>
+        </div></th><td class="health-log-time"><time datetime="${e(cocoaDate(record.occurredAt).toISOString())}">${e(dateTime(record.occurredAt))}</time></td>
+        <td class="health-log-value">${e(recordValue(record))}</td><td class="health-log-actions">
+        ${button(t("编辑", "Edit"), "record-edit", record.id, { icon: "edit", iconOnly: true, title: t(`编辑 ${name}`, `Edit ${name}`) })}
+        ${button(t("删除", "Delete"), "record-delete", record.id, { icon: "trash", iconOnly: true, title: t(`删除 ${name}`, `Delete ${name}`) })}
+        </td></tr>`;
+    }).join("");
+    return `<table class="health-log-table" aria-label="${e(label)}"><colgroup><col><col class="health-col-time">
+      <col class="health-col-value"><col class="health-col-actions"></colgroup><thead><tr>
+      <th scope="col">${e(t("记录", "Entry"))}</th><th scope="col">${e(t("时间", "Time"))}</th>
+      <th scope="col">${e(t("数值", "Value"))}</th><th scope="col">${e(t("操作", "Actions"))}</th>
+      </tr></thead><tbody>${tableRows}</tbody></table>`;
   }
 
-  function quick(kind, value, detail, action, progress) {
+  function quick(kind, value, detail, action, actionLabel, progress) {
     const config = KINDS[kind];
     return `<button class="health-quick" type="button" data-health-action="${action}" data-value="${kind}">
-      <span data-color="${config[3]}">${icon(config[2])}${e(kindName(kind))}</span><strong>${e(value)}</strong>
+      <span class="health-quick-heading"><span class="health-glyph" data-color="${config[3]}">${icon(config[2])}</span>
+      <span>${e(kindName(kind))}</span></span><strong>${e(value)}</strong>
       ${progress != null ? `<progress value="${Math.max(0, Math.min(1, progress))}" max="1"></progress>` : ""}
-      <small>${e(detail)}</small></button>`;
+      <span class="health-quick-footer"><small>${e(detail)}</small>
+      <span class="health-quick-action">${icon("plus")}${e(actionLabel)}</span></span></button>`;
   }
 
   function sleepSummary() {
     const health = h();
     const today = health.sleepRecords.filter((item) => reportDay(item.endedAt) === health.today);
     const total = today.reduce((sum, item) => sum + item.durationSeconds, 0);
-    const controls = button(t("记录睡眠", "Record sleep"), "sleep-add", "", { icon: "plus" });
-    const detail = today.length ? t(`${today.length} 笔 · ${g().duration(total)}`, `${today.length} entries · ${g().duration(total)}`) : t("今天还没有睡眠记录", "No sleep recorded today");
-    return card(t("睡眠", "Sleep"), row(t("今日睡眠", "Today’s sleep"), health.sleepSyncError || detail, "",
-      go(t("查看", "View"), "records-sleep") + controls, KINDS.sleep[2], "purple"));
+    const recent = today.at(0);
+    const controls = button(t("记睡眠", "Log sleep"), "sleep-add", "", { icon: "plus" });
+    const detail = recent ? `${dateTime(recent.startedAt)} → ${dateTime(recent.endedAt)}` : t("今天还没有睡眠记录", "No sleep recorded today");
+    return card(t("今日睡眠", "Today’s sleep"), `<div class="health-sleep-summary">
+      <span class="health-glyph" data-color="purple">${icon(KINDS.sleep[2])}</span>
+      <div><strong>${e(today.length ? g().duration(total) : "—")}</strong><p class="health-caption">${e(health.sleepSyncError || detail)}</p></div>
+      </div>`, { className: "health-sleep-card", actions: controls + go(t("查看", "View"), "records-sleep") });
   }
 
   function reserves() {
@@ -168,32 +189,35 @@
     const latest = byNewest(health.records.filter((record) => reportDay(record.occurredAt) === health.today &&
       (!health.hideWeight || record.kind !== "weight")));
     const stats = [
-      quick("water", amount(health.water, "mL"), health.waterGoal ? t(`目标 ${num(health.waterGoal)} mL · 一键记录`, `Goal ${num(health.waterGoal)} mL · quick add`) :
-        `+${num(health.preferences.cup)} mL · ${t("一键记录", "Quick add")}`, "water", health.waterGoal ? health.water / health.waterGoal : null),
-      quick("meal", t(`${health.meals} 笔`, `${health.meals} entries`), t("选择饮食方式和饱食程度", "Choose a meal source and fullness"), "record-new"),
-      quick("exercise", amount(health.exerciseMinutes, "min"), t("步行也是日常运动", "A walk counts, too"), "record-new"),
-      health.hideWeight ? "" : quick("weight", amount(health.weight, "kg"), t("按自己的节奏记录", "At your own pace"), "record-new"),
+      quick("water", amount(health.water, "mL"), health.waterGoal ? t(`目标 ${num(health.waterGoal)} mL`, `Goal ${num(health.waterGoal)} mL`) : "",
+        "water", `${num(health.preferences.cup)} mL`, health.waterGoal ? health.water / health.waterGoal : null),
+      quick("meal", t(`${health.meals} 笔`, `${health.meals} entries`), "", "record-new", t("记一餐", "Log meal")),
+      quick("exercise", amount(health.exerciseMinutes, "min"), "", "record-new", t("记运动", "Log activity")),
+      health.hideWeight ? "" : quick("weight", amount(health.weight, "kg"), "", "record-new", t("记体重", "Log weight")),
     ].join("");
     const welcome = health.preferences.onboarding ? "" : card(t("欢迎来到你的岛", "Welcome to your island"),
       caption(t("记一杯水，或到荒岛点起第一堆篝火。", "Record a glass of water or build your first campfire.")),
       { actions: primary(t("开始记录", "Let’s begin"), "welcome", "", "sparkles") + button(t("关闭", "Dismiss"), "welcome-dismiss") });
-    const preview = !health.preferences.gameEnabled ? "" :
-      `<div class="health-island-preview">${islandArt()}${card(t("记录一点，生长一点", "One record at a time"),
-        caption(health.island.paused ? t("岛屿正在休整。", "Your island is resting.") :
-          t(`已建成 ${health.island.buildings.length} 座建筑`, `${health.island.buildings.length} buildings`))
-        + go(t("去岛上看看", "Visit your island"), "island", "arrow.right"))}</div>${reserves()}`;
+    const preview = !health.preferences.gameEnabled ? "" : card(t("荒岛生活", "Island life"),
+      `<div class="health-island-preview">${islandArt()}</div>
+        ${caption(health.island.paused ? t("岛屿正在休整。", "Your island is resting.") :
+          t(`Lv.${health.island.level} · ${health.island.buildings.length} 座建筑`, `Lv.${health.island.level} · ${health.island.buildings.length} buildings`))}
+        ${reserves()}`,
+      { className: "health-island-card", actions: go(t("进入荒岛", "Open island"), "island", "right") });
     const templates = health.templates.filter((item) => !health.hideWeight || item.record.kind !== "weight");
     templates.sort((a, b) => b.uses - a.uses);
-    return header(t("把照顾自己，变成小小日常。", "Small moments. A healthier rhythm."), dayLabel(health.today))
-      + welcome + `<div class="health-title-row"><h2>${e(t("今日记录", "Today’s records"))}</h2>
-        ${health.streak > 1 ? `<span>${icon("flame.fill")}${e(t(`已连续记录 ${health.streak} 天`, `${health.streak}-day streak`))}</span>` : ""}
-        ${button(t("补记", "Backfill"), "backfill-menu", "", { icon: "clock.arrow.circlepath" })}</div>
-        <div class="health-grid health-four">${stats}</div>` + sleepSummary() + preview
-      + (templates.length ? card(t("常用模板 · 点击即记", "Favorites · one-click record"), `<div class="health-inline">${templates.slice(0, 8).map((item) =>
+    const logs = latest.length ? recordTable(latest, t("今日记录", "Today’s records")) : empty(t("还没有今日记录", "No entries today"));
+    const favorites = templates.length ? card(t("常用模板", "Favorites"), `<div class="health-inline">${templates.slice(0, 8).map((item) =>
         button(item.name, "template-use", item.id, { icon: KINDS[item.record.kind]?.[2] })).join("")}</div>`,
-        { actions: button(t("管理模板", "Manage templates"), "template-manage") }) : "")
-      + card("", latest.length ? latest.map(normalRow).join("") : empty(t("今天，从一笔小记录开始", "A fresh page for today"),
-        t("喝水、吃饭、散步，都值得被看见。", "Water, meals, movement."), "leaf"));
+        { actions: button(t("管理模板", "Manage templates"), "template-manage") }) : "";
+    return header(t("健康今日", "Health today"), dayLabel(health.today), health.streak > 1 ?
+      `<span class="health-streak">${icon("flame.fill")}${e(t(`已连续记录 ${health.streak} 天`, `${health.streak}-day streak`))}</span>` : "")
+      + welcome + `<div class="health-metric-strip">${stats}</div><div class="health-dashboard">
+        ${card(t("今日记录", "Today’s records"), logs, { subtitle: t(`共 ${latest.length} 笔`, `${latest.length} entries`),
+          className: "health-log-card", actions: button(t("补记", "Backfill"), "backfill-menu", "", { icon: "clock" }) +
+          go(t("查看全部", "View all"), "records", "right") })}
+        <aside class="health-dashboard-aside" aria-label="${e(t("睡眠、模板和荒岛", "Sleep, favorites and island"))}">
+        ${sleepSummary()}${favorites}${preview}</aside></div>`;
   }
 
   function startOfRange(days) {
@@ -230,7 +254,7 @@
 
   function recordsPage(section) {
     if (section === "records-sleep") {
-      return header(t("睡眠记录", "Sleep records"), t("健康睡眠与睡眠计时使用同一份记录。", "Health and the sleep timer share one journal."))
+      return header(t("睡眠记录", "Sleep records"), t("与睡眠计时同步", "Synced with the sleep timer"))
         + sleepSummary() + sleepRows(false);
     }
     const kind = ui.filter || recordSection(section);
@@ -242,14 +266,23 @@
       && (!h().hideWeight || record.kind !== "weight") && (!since || reportDay(record.occurredAt) >= since)
       && (!query || `${record.title} ${record.note}`.toLocaleLowerCase().includes(query))));
     const filters = [["all", t("全部", "All")], ...Object.keys(KINDS).filter((key) => !h().hideWeight || key !== "weight").map((key) => [key, kindName(key)])];
-    return header(t("全部记录", "All records"), t("按类型查找、编辑或删除记录。", "Find, edit or delete entries by type."))
-      + `<div class="health-inline health-filters">${filters.map(([key, label]) => button(label, "record-filter", key, { className: key === kind ? "primary" : "", icon: KINDS[key]?.[2] })).join("")}</div>
-      <form id="health-record-search" class="health-inline health-search">
-        ${g().input("query", t("搜索名称或备注", "Search names or notes"), ui.query, { type: "search" })}
-        ${g().select("range", t("时间范围", "Date range"), [["7", t("近 7 天", "7 days")], ["30", t("近 30 天", "30 days")], ["0", t("全部时间", "All time")]], String(ui.range))}
-        <button type="submit">${e(t("搜索", "Search"))}</button></form>`
-      + (kind !== "sleep" ? card("", visible.length ? visible.slice(ui.page * PAGE_SIZE, (ui.page + 1) * PAGE_SIZE).map(normalRow).join("")
-        + pageBar(visible.length, ui.page, "record-page") : empty(t("还没有匹配的记录", "No matching records"), t("调整筛选或记一笔。", "Adjust your filters or add an entry."), "tray")) : "")
+    const name = kind === "all" ? t("全部记录", "All records") : t(`${kindName(kind)}记录`, `${kindName(kind)} records`);
+    const logPanel = kind === "sleep" ? "" : card(name,
+      visible.length ? recordTable(visible.slice(ui.page * PAGE_SIZE, (ui.page + 1) * PAGE_SIZE), name)
+        + pageBar(visible.length, ui.page, "record-page") : empty(t("还没有匹配的记录", "No matching records")),
+      { subtitle: t(`共 ${visible.length} 笔`, `${visible.length} entries`), className: "health-log-card" });
+    return header(t("健康记录", "Health records"), "")
+      + `<div class="card health-record-toolbar">
+        <div class="health-inline health-filters" role="group" aria-label="${e(t("记录类型", "Record type"))}">
+          ${filters.map(([key, label]) => button(label, "record-filter", key, { pressed: key === kind, icon: KINDS[key]?.[2] })).join("")}
+        </div>
+        <form id="health-record-search" class="health-search" role="search">
+          ${g().input("query", t("搜索名称或备注", "Search names or notes"), ui.query, { type: "search", placeholder: t("搜索名称或备注", "Search names or notes") })}
+          ${g().select("range", t("时间范围", "Date range"), [["7", t("近 7 天", "7 days")], ["30", t("近 30 天", "30 days")], ["0", t("全部时间", "All time")]], String(ui.range))}
+          <button type="submit">${e(t("搜索", "Search"))}</button>
+          ${ui.query || ui.range !== 7 ? button(t("清除", "Clear"), "record-reset", "", { title: t("清除筛选", "Clear filters") }) : ""}
+        </form></div>`
+      + logPanel
       + (kind === "all" || kind === "sleep" ? sleepRows(true, query, ui.range) : "");
   }
 
@@ -266,11 +299,17 @@
   function trendChart(points, days, key, title, unit, color) {
     const byDay = new Map(points.map((point) => [point.day, point]));
     const values = points.map((point) => point[key]).filter((value) => value != null);
-    if (!values.length) return card(title, empty(t("还没有记录", "No data yet")));
+    if (!values.length) return card(title, `<div class="health-chart-empty">${icon("chart")}
+      ${e(t("还没有记录", "No data yet"))}</div>`, { className: "health-trend-card", actions: caption(unit) });
     const weight = key === "weight";
-    const maximum = Math.max(...values) || 1;
-    const base = weight ? Math.max(0, Math.min(...values) - Math.max(0.5, maximum * 0.02)) : 0;
-    const scale = maximum - base || 1;
+    const maximum = Math.max(...values);
+    const minimum = weight ? Math.max(0, Math.min(...values) - 0.4) : 0;
+    const raw = (maximum - minimum || 1) / 4;
+    const decimal = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].find((value) => value * decimal >= raw) * decimal;
+    const base = weight ? Math.floor(minimum / step) * step : 0;
+    const top = Math.max(base + step, Math.ceil(maximum / step) * step);
+    const scale = top - base;
     const tick = Math.max(1, Math.ceil(days.length / 6));
     const chart = days.map((day, index) => {
       const value = byDay.get(day)?.[key];
@@ -282,7 +321,15 @@
         style="--value:${(average - base) / scale * 100}%" title="${e(t("七日均值", "7-day average"))} ${num(average)} ${unit}"></span>` : ""}
         ${index % tick === 0 ? `<small>${e(day.slice(5))}</small>` : ""}</div>`;
     }).join("");
-    return card(title, `<div class="health-chart" data-color="${color}" style="--points:${days.length}">${chart}</div>`, { actions: caption(unit) });
+    const lines = Array.from({ length: Math.round(scale / step) + 1 }, (_, index) =>
+      `<span class="health-chart-tick" style="--value:${index * step / scale * 100}%"><small>${e(num(base + index * step))}</small></span>`).join("");
+    const legend = weight ? `<div class="health-chart-legend" data-color="${color}">
+      <span><i></i>${e(t("实测", "Measured"))}</span><span><i></i>${e(t("7 日均值", "7-day average"))}</span></div>` : "";
+    const details = `<details class="health-chart-details"><summary>${e(t("查看数值", "View values"))}</summary>
+      <div class="health-chart-data">${points.filter((point) => point[key] != null).map((point) =>
+        `<span><time datetime="${e(point.day)}">${e(point.day.slice(5))}</time> <strong>${e(amount(point[key], unit))}</strong></span>`).join("")}</div></details>`;
+    return card(title, `<div class="health-chart" data-color="${color}" style="--points:${days.length}" aria-hidden="true">${lines}${chart}</div>
+      ${legend}${details}`, { className: "health-trend-card", actions: caption(unit) });
   }
 
   function trends() {
@@ -290,20 +337,22 @@
     const points = report.points;
     const days = dateSpan(report.start, report.end);
     const total = (key) => points.reduce((sum, point) => sum + (point[key] || 0), 0);
-    const controls = [1, 7, 30].map((value) => button(value === 1 ? t("今日", "Today") : t(`近 ${value} 天`, `${value} days`),
-      "trend-range", value, { className: value === ui.days ? "primary" : "" })).join("");
+    const controls = `<div class="health-inline health-filters health-trend-filters" role="group" aria-label="${e(t("趋势范围", "Trend range"))}">
+      ${[1, 7, 30].map((value) => button(value === 1 ? t("今日", "Today") : t(`近 ${value} 天`, `${value} days`),
+        "trend-range", value, { pressed: value === ui.days })).join("")}</div>`;
     const metrics = [["water", "饮水量", "Water", "mL", "blue"], ["exercise", "运动时长", "Activity", "min", "green"]];
     if (!h().hideCalories) metrics.push(["intakeCalories", "已记录摄入", "Recorded intake", "kcal", "orange"],
       ["exerciseCalories", "已记录运动消耗", "Recorded activity energy", "kcal", "purple"]);
-    if (!h().hideWeight) metrics.push(["weight", "体重实测 · 青色为 7 日均值", "Weight · teal shows the 7-day average", "kg", "purple"]);
+    if (!h().hideWeight) metrics.push(["weight", "体重", "Weight", "kg", "purple"]);
     const nutrition = h().hideCalories ? "" : card(t("营养汇总", "Nutrition totals"),
       ["protein", "carbs", "fat"].map((key, index) => {
         const available = points.some((point) => point[key] != null);
         return row(t(...[["蛋白质", "Protein"], ["碳水", "Carbs"], ["脂肪", "Fat"]][index]), "",
           available ? amount(total(key), "g") : "—", "", "meals", "orange");
       }).join(""));
-    return header(t("统计", "Trends"), t("看见积累，不必追逐完美曲线。", "Notice your patterns over time."), controls)
-      + `<div class="health-grid health-three">${g().tile(amount(total("water"), "mL"), t("饮水总量", "Water logged"), "water", "blue")}
+    const range = `${dayLabel(report.start)} – ${dayLabel(report.end)}`;
+    return header(t("健康趋势", "Health trends"), range, controls)
+      + `<div class="health-grid health-three health-trend-summary">${g().tile(amount(total("water"), "mL"), t("饮水总量", "Water logged"), "water", "blue")}
         ${g().tile(amount(total("exercise"), "min"), t("活动总时长", "Active minutes"), "exercise", "green")}
         ${g().tile(`${points.length} / ${ui.days}`, t("记录天数", "Days with entries"), "calendar", "teal")}</div>
       <div class="health-grid health-two">${metrics.map(([key, cn, en, unit, color]) => trendChart(points, days, key, t(cn, en), unit, color)).join("")}${nutrition}</div>`
@@ -367,7 +416,7 @@
     const health = h();
     const scene = health.island;
     const catalog = g().state.catalog;
-    const title = header(t("荒岛生活", "Island life"), t("没有终点，只有慢慢长成的家。", "A place that grows with you."), actions("island"));
+    const title = header(t("荒岛生活", "Island life"), "", actions("island"));
     if (!health.preferences.gameEnabled) return title + empty(t("正在使用纯记录模式", "Journal-only mode"));
     const supplyGain = 5 + 3 * (scene.buildings.includes("kitchen") ? scene.buildingLevels.kitchen || 1 : 0);
     const ledger = health.dailyLedger;
@@ -470,11 +519,14 @@
     const energyField = kind === "exercise" && !h().hideCalories ?
       input("calories", t("估计消耗 (kcal)", "Estimated energy (kcal)"), record.calories ?? "", { type: "number", min: 0, max: 100000, step: "any" }) : "";
     const title = existing ? t("编辑记录", "Edit record") : backfill ? t("补记", "Backfill") : t("记一笔", "Record");
-    g().modal(`${title} · ${kindName(kind)}`, `<div class="health-form">${input("occurredAt", t("时间", "Date and time"), localInput(dateValue),
+    g().modal(`${title} · ${kindName(kind)}`, `<div class="health-form health-editor">
+      <div class="health-editor-grid">${input("occurredAt", t("时间", "Date and time"), localInput(dateValue),
       { type: "datetime-local", required: true })}
       ${input("title", t("名称", "Name"), record.title ?? (kind === "exercise" ? t("步行", "Walking") : ""),
-        { maxlength: 200 })}${amountField}${addMeal}${energyField}
-      ${textarea("note", t("备注", "Notes"), record.note || "")}${checkbox("saveTemplate", t("存为常用模板", "Save as favorite"), false)}</div>`,
+        { maxlength: 200 })}</div>
+      <div class="health-editor-grid${kind === "meal" ? " health-editor-meal" : ""}">${amountField}${addMeal}${energyField}</div>
+      ${textarea("note", t("备注", "Notes"), record.note || "")}
+      <div class="health-editor-template">${checkbox("saveTemplate", t("存为常用模板", "Save as favorite"), false)}</div></div>`,
     async (_, form) => {
       const formData = formFields(form);
       const payload = { kind, occurredAt: formData.occurredAt, title: formData.title, amount: Number(formData.amount),
@@ -483,7 +535,7 @@
       if (kind === "meal") Object.assign(payload, { slot: Number(formData.slot), mealSource: formData.mealSource, fullnessPercent: Number(formData.fullnessPercent) });
       if ("calories" in formData) payload.calories = formData.calories === "" ? null : Number(formData.calories);
       await post("record", payload, { throw: true, message: t("记录已保存。", "Record saved.") });
-    });
+    }, { className: "health-record-editor" });
   }
 
   function showSleep(backfill = false) {
@@ -495,20 +547,21 @@
     initialEnd.setDate(initialEnd.getDate() + 1);
     initialEnd.setHours(7, 0, 0, 0);
     const initialStart = new Date(initialEnd.getTime() - 8 * 60 * 60 * 1000);
-    const form = g().modal(t("记录睡眠", "Record sleep"), `<div class="health-form">${input("night", t("哪一晚", "Night"), g().localDay(night), { type: "date", required: true })}
-      <div class="health-grid health-two">${input("hours", t("小时", "Hours"), 8, { type: "number", min: 0, max: 24, step: 1, required: true })}
+    const form = g().modal(t("记录睡眠", "Record sleep"), `<div class="health-form health-editor">
+      <div class="health-editor-grid health-editor-meal">${input("night", t("哪一晚", "Night"), g().localDay(night), { type: "date", required: true })}
+      ${input("hours", t("小时", "Hours"), 8, { type: "number", min: 0, max: 24, step: 1, required: true })}
       ${input("minutes", t("分钟", "Minutes"), 0, { type: "number", min: 0, max: 59, step: 1, required: true })}</div>
-      <output id="health-sleep-estimate" class="health-caption"></output>
+      <output id="health-sleep-estimate" class="health-caption health-sleep-estimate"></output>
       <details><summary>${e(t("填写确切的就寝和起床时间", "Enter exact bed and wake times"))}</summary>
       ${g().checkbox("exact", t("使用以下时间", "Use these times"), false)}
-      ${input("start", t("就寝", "Bedtime"), localInput(initialStart), { type: "datetime-local" })}
-      ${input("end", t("起床", "Wake time"), localInput(initialEnd), { type: "datetime-local" })}</details></div>`,
+      <div class="health-editor-grid">${input("start", t("就寝", "Bedtime"), localInput(initialStart), { type: "datetime-local" })}
+      ${input("end", t("起床", "Wake time"), localInput(initialEnd), { type: "datetime-local" })}</div></details></div>`,
     async (_, currentForm) => {
       const values = formFields(currentForm);
       const minutes = Number(values.hours) * 60 + Number(values.minutes);
       const body = values.exact ? { start: values.start, end: values.end } : { night: values.night, minutes };
       await post("sleep/add", body, { throw: true, message: t("睡眠已保存到共同记录。", "Sleep saved in the shared journal.") });
-    });
+    }, { className: "health-record-editor" });
     const estimate = () => {
       const values = formFields(form);
       const output = form.querySelector("#health-sleep-estimate");
@@ -675,7 +728,13 @@
         confirm(t("删除记录？", "Delete record?"), t("删除后可撤销。", "You can undo this deletion."), "record/delete", { id: value });
         break;
       case "record-filter":
-        Object.assign(ui, { filter: value, page: 0, sleepCount: 30 }); g().render(); break;
+        Object.assign(ui, { filter: value, page: 0, sleepCount: 30 }); g().render();
+        document.querySelector('.health-filters [aria-pressed="true"]')?.focus({ preventScroll: true });
+        break;
+      case "record-reset":
+        Object.assign(ui, { query: "", range: 7, page: 0, sleepCount: 30 }); g().render();
+        document.querySelector("#health-record-search input")?.focus({ preventScroll: true });
+        break;
       case "record-page": ui.page = Number(value); g().render(); break;
       case "sleep-add": showSleep(value === "past"); break;
       case "sleep-more": ui.sleepCount += 30; g().render(); break;
@@ -691,7 +750,10 @@
       case "template-delete":
         confirm(t("删除模板？", "Delete template?"), t("历史记录保留。", "Saved entries are retained."), "template/delete", { id: value });
         break;
-      case "trend-range": ui.days = Number(value); g().render(); break;
+      case "trend-range":
+        ui.days = Number(value); g().render();
+        document.querySelector('.health-trend-filters [aria-pressed="true"]')?.focus({ preventScroll: true });
+        break;
       case "event-type": showEventType(value); break;
       case "event-type-restore": await post("event/type", { id: value, archived: false }); break;
       case "event-quick": await post("event", { typeID: value, count: 1 }, { message: t("已记录。", "Event logged.") }); break;
@@ -739,6 +801,7 @@
       const { query, range } = formFields(event.currentTarget);
       Object.assign(ui, { query, range: Number(range), page: 0, sleepCount: 30 });
       g().render();
+      document.querySelector("#health-record-search input")?.focus({ preventScroll: true });
     });
     document.querySelector('[name="event-filter"]')?.addEventListener("change", (event) => {
       Object.assign(ui, { eventFilter: event.target.value, eventPage: 0 });
