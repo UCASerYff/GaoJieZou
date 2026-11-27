@@ -31,8 +31,9 @@ struct WeeklyReviewRegression {
         let now = date(11, 2, 10)
         let habit = Habit(id: "Habit-ONE", title: "Current name", symbol: "circle", weekdays: [2],
                           rewardCoins: 1, createdAt: now)
+        let expectedSleepSeconds: TimeInterval = 28_800
         let sleep = SleepRecord(id: "canonical-sleep", startedAt: date(11, 1, 22), endedAt: date(11, 2, 6),
-                                durationSeconds: 8 * 3600, score: 100, pastureYield: 0)
+                                durationSeconds: expectedSleepSeconds, score: 100, pastureYield: 0)
         let dated = ShortAction(id: "dated", goalID: "goal", title: "Dated work", notes: "",
                                 dueDate: date(11, 4), startDate: date(11, 2), endDate: date(11, 4),
                                 estimatedMinutes: 40, focusedSeconds: 0, isCompleted: true, rewardClaimed: true,
@@ -54,10 +55,13 @@ struct WeeklyReviewRegression {
         let goal = LongGoal(id: "goal", title: "Project", reason: "", outcome: "", targetValue: 0, currentValue: 0,
                             unit: "", startDate: date(10, 31), targetDate: date(11, 15),
                             status: .completed, rewardClaimed: true, createdAt: date(10, 31))
+        let expectedFallBackSeconds: TimeInterval = 14_400
+        let pausedSessionSeconds: TimeInterval = 1_800
+        let midnightSessionSeconds: TimeInterval = 1_500
         let focusRecords = [
             focus("DST fallback", date(11, 1, 0, 30), date(11, 1, 3, 30)),
-            focus("Paused across weeks", date(11, 1, 23, 30), date(11, 2, 0, 30), elapsed: 1800),
-            focus("Finished at midnight", date(10, 31, 23), date(11, 1), elapsed: 1500),
+            focus("Paused across weeks", date(11, 1, 23, 30), date(11, 2, 0, 30), elapsed: pausedSessionSeconds),
+            focus("Finished at midnight", date(10, 31, 23), date(11, 1), elapsed: midnightSessionSeconds),
         ]
         let keys: Set<String> = [
             "Habit-ONE-2026-11-1", "habit-one-2026-11-01", "deleted-habit-2026-11-1",
@@ -75,7 +79,7 @@ struct WeeklyReviewRegression {
         require(historic.weekStart == date(10, 26) && historic.weekEnd == date(11, 1), "Monday–Sunday local week")
         require(historic.currentWeekStart == date(11, 2) && historic.days.count == 7, "seven dates, independent of firstWeekday")
         require(historic.plan == nil && historic.days.allSatisfy { $0.habitPlan == nil }, "historical plan is unknown")
-        require(historic.days[5].focusSeconds == 1500 && !historic.days[5].focusEstimated,
+        require(historic.days[5].focusSeconds == midnightSessionSeconds && !historic.days[5].focusEstimated,
                 "exact midnight ends in the earlier day")
         require(historic.days[6].focusSeconds == 15300 && historic.days[6].focusEstimated,
                 "DST real elapsed plus the correctly apportioned paused focus segment")
@@ -87,15 +91,19 @@ struct WeeklyReviewRegression {
 
         let current = report(now)
         require(current.days[0].focusSeconds == 900 && current.focusEstimated, "the other half belongs to Monday")
-        require(current.focusSeconds + historic.focusSeconds == 4 * 3600 + 1800 + 1500,
-                "cross-week splits preserve all saved elapsed seconds")
-        require(current.days[0].sleep.map(\.id) == [sleep.id] && current.sleepNights == 1 && current.sleepSeconds == 28800,
-                "one canonical sleep record")
+        let combinedFocusSeconds: TimeInterval = current.focusSeconds + historic.focusSeconds
+        let expectedCombinedSeconds: TimeInterval = expectedFallBackSeconds + pausedSessionSeconds + midnightSessionSeconds
+        require(combinedFocusSeconds == expectedCombinedSeconds, "cross-week splits preserve all saved elapsed seconds")
+        let sleepIDs: [String] = current.days[0].sleep.map(\.id)
+        require(sleepIDs == [sleep.id], "one canonical sleep record")
+        require(current.sleepNights == 1, "canonical sleep counts as one night")
+        require(current.sleepSeconds == expectedSleepSeconds, "canonical sleep preserves its saved duration")
         require(current.days[1].sleepSeconds == nil && current.habitDone == 0, "missing sleep and future check-ins are distinct")
-        require(current.plan?.habitCount == 1 && current.plan?.focusMinutes == 40 && current.plan?.items.count == 2,
-                "timed actions count on their start week, empty dates do not manufacture plans")
-        require(current.plan?.items.first(where: { $0.id == dated.id })?.goalTitle == goal.title,
-                "plan keeps real action and goal identifiers")
+        require(current.plan?.habitCount == 1, "plan uses the current check-in schedule")
+        require(current.plan?.focusMinutes == 40, "timed actions count on their start week")
+        require(current.plan?.items.count == 2, "empty dates do not manufacture plans")
+        let plannedAction = current.plan?.items.first(where: { $0.id == dated.id })
+        require(plannedAction?.goalTitle == goal.title, "plan keeps real action and goal identifiers")
         require(current.days[0].actions.map(\.id) == [dated.id], "completion follows the recorded date")
         let unavailable = report(now, sleepRecords: nil)
         require(unavailable.sleepUnavailable && unavailable.sleepSeconds == nil && unavailable.sleepNights == nil,
@@ -131,8 +139,10 @@ struct WeeklyReviewRegression {
         let path = root.appendingPathComponent("library.json")
         let saved = try Data(contentsOf: path)
         let report = store.weeklyReview(containing: today, sleepTargetHours: 8)
-        require(report?.days.contains { $0.goals.contains { $0.id == newGoal.id } } == true,
-                "real store routes the completed goal to a date")
+        let foundCompletedGoal: Bool = report?.days.contains { day in
+            day.goals.contains { $0.id == newGoal.id }
+        } ?? false
+        require(foundCompletedGoal, "real store routes the completed goal to a date")
         let afterReview = try Data(contentsOf: path)
         require(saved == afterReview, "opening a review does not change the archive")
 
