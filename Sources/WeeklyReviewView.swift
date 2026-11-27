@@ -108,8 +108,8 @@ extension View {
 struct WeeklyReviewView: View {
     @EnvironmentObject private var store: RhythmStore
     @EnvironmentObject private var settings: RhythmSettings
-    @Environment(.dismiss) private var dismiss
-    @Environment(.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var selectedWeek: Date?
     @State private var selectedDay: Date?
 
