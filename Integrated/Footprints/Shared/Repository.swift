@@ -266,8 +266,21 @@ final class Repository {
         }
         let trips = Dictionary(uniqueKeysWithValues: journal.trips.map { ($0.id,$0.name) })
         let header = "记录ID,城市,国家或地区代码,日期精度,年份,月份,日期,旅行,笔记,照片数\r\n"
-        return "\u{FEFF}" + header + journal.visits.map { v in
-            [v.id, cities[v.cityID]?.name ?? v.cityID, cities[v.cityID]?.countryID ?? "", v.date.precision.rawValue, v.date.year.map(String.init) ?? "", v.date.month.map(String.init) ?? "", v.date.day.map(String.init) ?? "", v.tripID.flatMap { trips[$0] } ?? "", v.note, String(v.photoIDs.count)].map(escape).joined(separator: ",")
-        }.joined(separator: "\r\n")
+        let rows: [String] = journal.visits.map { visit in
+            let city = cities[visit.cityID]
+            let cityName: String = city?.name ?? visit.cityID
+            let countryID: String = city?.countryID ?? ""
+            let year: String = visit.date.year.map { String($0) } ?? ""
+            let month: String = visit.date.month.map { String($0) } ?? ""
+            let day: String = visit.date.day.map { String($0) } ?? ""
+            let tripName: String = visit.tripID.flatMap { trips[$0] } ?? ""
+            let fields: [String] = [
+                visit.id, cityName, countryID, visit.date.precision.rawValue,
+                year, month, day, tripName, visit.note, String(visit.photoIDs.count),
+            ]
+            return fields.map(escape).joined(separator: ",")
+        }
+        let body = rows.joined(separator: "\r\n")
+        return "\u{FEFF}" + header + body
     }
 }
