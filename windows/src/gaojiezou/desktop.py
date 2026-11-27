@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from gaojiezou import library
+from gaojiezou.notifications import ToastResult, set_process_identity, submit_habit_toast
 from gaojiezou.store import _habit_key, _scheduled
 
 LOG = logging.getLogger(__name__)
@@ -87,6 +88,7 @@ class BackgroundRhythm:
         self.inactive: set[str] = set()
         self.last_save = time.monotonic()
         self.last_sleep_sync = self.last_save
+        self.last_reminder_check = None
         self.reminder_marker = server.store.directory / "last-habit-reminder.txt"
         try:
             self.last_reminder = self.reminder_marker.read_text(encoding="ascii").strip()
@@ -134,8 +136,13 @@ class BackgroundRhythm:
                     store.save()
             settings = store.settings
             day = now.date().isoformat()
+            check = self.last_reminder_check
+            self.last_reminder_check = now
+            due = settings.get("habitReminderHour", 21), settings.get("habitReminderMinute", 0)
+            minute = now.hour, now.minute
+            crossed_due_today = check is not None and check.date() == now.date() and (check.hour, check.minute) < due <= minute
             if (settings.get("habitReminderEnabled") and day != self.last_reminder
-                    and (now.hour, now.minute) == (settings.get("habitReminderHour", 21), settings.get("habitReminderMinute", 0))):
+                    and (minute == due or crossed_due_today)):
                 total, complete = habit_counts(store, now)
                 pending = total - complete
                 if pending:
@@ -215,6 +222,7 @@ class WindowsDesktop:
         self.background = BackgroundRhythm(server, self._notify)
 
     def start(self) -> None:
+        self.toast_identity = self.tray and set_process_identity()
         user = C.WinDLL("user32", use_last_error=True)
         if hasattr(user, "SetProcessDpiAwarenessContext"):
             _binding(user, "SetProcessDpiAwarenessContext", W.BOOL, C.c_void_p)(-4)  # Per-monitor v2.
@@ -347,6 +355,10 @@ class WindowsDesktop:
         return True
 
     def _notify(self, title: str, message: str) -> bool:
+        if self.toast_identity:
+            result = submit_habit_toast(title, message)
+            if result is not ToastResult.UNAVAILABLE:
+                return True
         if not self.tray_added:
             return False
         icon = self._notification()

@@ -14,6 +14,12 @@
   const asset = name => "/art/" + name + ".png";
   const chip = (symbol,name) => '<span class="scene-chip">' + icon(symbol) + esc(name) + "</span>";
   let aquarium = false;
+  let immersive = false;
+  let fishingSpot = 0;
+  let farmTool = "inspect";
+  let selectedPlot;
+  let selectedAnimal;
+  let selectedFish;
   let castTime = 0;
   let castPending = false;
   let dragged;
@@ -30,8 +36,9 @@
   }
 
   function scene(image,chips,surface,tools,classes="") {
-    return '<div class="game-scene '+classes+'"><img src="' + asset(image) + '" alt=""><div class="row scene-hud">' +
-      chips + '</div>' + surface + '<div class="row scene-toolbar">' + tools + "</div></div>";
+    return '<div class="game-scene '+classes+'" data-estate-mode="'+classes.replace("-scene","")+'"><img src="' + asset(image) + '" alt="">' +
+      (chips ? '<div class="row scene-hud">' + chips + '</div>' : "") +
+      surface + (tools ? '<div class="row scene-toolbar">' + tools + "</div>" : "") + "</div>";
   }
   function index() {
     const info = [
@@ -63,10 +70,19 @@
     }).join("") + "</div>";
     const cost = G.state.estate.nextPlotCost;
     const ready = plots.some(plot => plot.cropID && plot.growthMinutes >= (cat().crops.find(spec => spec.id === plot.cropID)?.minutes ?? Infinity));
-    const controls = raw(t("扩建农田","Buy a plot") + " · " + coins(cost),"buy-plot","plus","primary",plots.length >= 25) +
+    const tools = [["inspect","查看","Inspect","eye"],["seed","播种","Plant","leaf"],["water","浇水","Water","water"],
+      ["fertilize","施肥","Fertilize","sun"],["harvest","收获","Harvest","tray"]];
+    const controls = tools.map(([key,zh,en,icon]) => raw(t(zh,en),"farm-tool:"+key,icon,key===farmTool?"estate-button-active":"secondary")).join("") +
+      raw(t("开垦","Expand") + " · " + coins(cost),"buy-plot","plus","secondary",plots.length >= 25) +
       raw(t("收获全部","Harvest all"),"harvest-all","coin","secondary",!ready) +
       btn("装饰商店","decorations","leaf") + btn("作物图鉴","collection:crops","list");
-    return shell(scene("FarmGameSceneV15",chip("coin",coins(lib().coins))+chip("leaf",planted+"/"+plots.length+t(" 块农田"," plots")),grid,controls,"farm-scene"));
+    const owned = lib().decorations.length ? '<div class="owned-decoration-strip">' +
+      lib().decorations.map(decoration => {
+        const spec = cat().decorations.find(row=>row.id===decoration.definitionID);
+        return spec ? raw("Lv. "+decoration.level,"decoration:"+decoration.id,"leaf","secondary").replace(
+          "<button ",'<button title="'+esc(t(spec.name))+'" ') : "";
+      }).join("")+"</div>" : "";
+    return shell(scene("FarmGameSceneV15",chip("coin",coins(lib().coins))+chip("leaf",planted+"/"+plots.length+t(" 块农田"," plots")),grid+owned,controls,"farm-scene"));
   }
 
   function pasture() {
@@ -101,19 +117,28 @@
           esc(t(spec?.name || row.fishID)) + '" data-action="estate:aquarium-resident:' + esc(row.id) + '">' + sprite("fish",spec) + "</button>";
       }).join("") + "</div>";
       const income = G.state.estate.aquariumIncome;
-      return shell(scene("AquariumGameSceneV15",chip("fish",aquariumResidents.length+"/25")+chip("coin",t("待领取","Pending")+" "+coins(income)),
-        fish,btn("返回渔场","pond","left","primary")+btn("管理鱼篓","basket","fish")+
-        btn("领取收益","aquarium-income","coin","secondary",!income)+"","aquarium-scene"));
+      const title = immersive ? '<div class="estate-exit-immersive">'+raw(t("退出观赏","Exit viewing"),"immersive","left")+'</div>' :
+        '<div class="estate-overlay"><h2>'+L("水下花园","Underwater garden")+'</h2><small>'+L("自由巡游 · 点击鱼儿查看档案","Watch them swim or select a fish")+'</small></div>';
+      const guide = aquariumResidents.length ? "" : '<p class="estate-overlay estate-empty-aquarium">'+
+        L("从鱼篓邀请第一位住客","Invite the first fish from your basket")+"</p>";
+      const controls=immersive?"":btn("返回渔场","pond","left","primary")+btn("管理鱼篓","basket","fish")+
+        btn("领取收益","aquarium-income","coin","secondary",!income)+raw(t("观赏","Watch"),"immersive","eye");
+      return shell(scene("AquariumGameSceneV15",immersive?"":chip("fish",aquariumResidents.length+"/25")+chip("coin",t("待领取","Pending")+" "+coins(income)),
+        fish+title+guide,controls,"aquarium-scene"));
     }
     const active = G.state.cast && G.currentClock() < G.state.cast.biteAt + 5;
     const indicator = '<div class="fishing-gauge" data-fishing-gauge' + (active ? "" : " hidden") +
       '><strong data-fishing-caption></strong><div class="fishing-meter"><i data-fishing-marker></i></div></div>';
+    const spotButtons=(window.EstateWorld?.spots || []).map(([zh,en],index)=>
+      raw(t(zh,en),"fishing-spot:"+index,"water",fishingSpot===index?"estate-button-active":"secondary",active)).join("");
+    const spotControls='<div class="estate-overlay"><h2>'+L("湖畔垂钓","Lakeside fishing")+
+      '</h2><div class="row">'+spotButtons+"</div></div>";
     const tools = btn("抛竿","cast","play","primary",!lib().bait || active) +
       btn("收竿","reel","check","primary",!active)+ btn("放下鱼竿","cancel-cast",null,"secondary",!active) +
       raw(t("鱼篓","Fish basket") + " · " + stock,"basket","fish") +
       raw(t("水族馆","Aquarium") + " · " + aquariumResidents.length,"aquarium","water") + btn("鱼类图鉴","collection:fish","list");
     return shell(scene("FishingGameSceneV15",chip("coin",coins(lib().coins))+chip("fish",lib().bait+" "+t("鱼饵","bait")),
-      indicator,tools,"fishing-scene"));
+      indicator+spotControls,tools,"fishing-scene"));
   }
 
   function collection(kind) {
@@ -199,6 +224,34 @@
       btn("取回鱼篓","return-fish:"+id,"fish","primary") + "</div>");
   }
 
+  async function choosePlot(id) {
+    if (id==="expand") { await G.act("/api/farm/buy-plot"); return; }
+    const plot=lib().farmPlots.find(row=>row.id===id);
+    if(!plot) return;
+    selectedPlot=id;
+    if(!plot.cropID) {
+      farmTool="seed";
+      G.render();
+      plotDialog(id);
+    } else if (farmTool==="inspect") plotDialog(id);
+    else if (farmTool==="seed") G.notice(t("这块田已经种有作物","A crop is already planted here"));
+    else await G.act("/api/farm/"+farmTool,{plotID:id},{message:farmTool==="water"?t("已浇水","Watered"):farmTool==="fertilize"?
+      t("已施肥","Fertilized"):t("已收获","Harvested")});
+  }
+
+  async function chooseAnimal(id) {
+    if(id==="expand") await G.act("/api/pasture/shelter");
+    else if(id?.startsWith("shelter:")) animalStore();
+    else if(id) { selectedAnimal=id;inspectAnimal(id); }
+  }
+
+  function showCatch(spec) {
+    G.modal(t("钓到","Caught")+" "+t(spec.name),'<div class="row">'+sprite("fish",spec)+
+      '<strong class="orange">'+"★".repeat(spec.rarity)+'</strong></div><div class="row">'+
+      raw(t("出售一条","Sell one")+" · +"+coins(spec.sell),"sell-fish:"+spec.id,"coin")+
+      btn("移入水族馆","move-fish:"+spec.id,"water","primary",lib().aquariumFish.length>=25)+"</div>");
+  }
+
   const paths = {
     "buy-plot":["/api/farm/buy-plot"],"plant":["/api/farm/plant","plotID","cropID"],
     "water":["/api/farm/water","plotID"],"fertilize":["/api/farm/fertilize","plotID"],"harvest":["/api/farm/harvest","plotID"],
@@ -214,16 +267,29 @@
     const control = event.target.closest('button[data-action^="estate:"]');
     if (!control) return;
     const [,action,id,value] = control.dataset.action.split(":");
-    if (action === "plot") plotDialog(id);
+    if (action === "plot") await choosePlot(id);
     if (action === "animal-shop") animalStore();
     if (action === "animal") inspectAnimal(id);
     if (action === "collection") collection(id);
     if (action === "decorations") decorations();
+    if (action === "decoration") {
+      const decoration=lib().decorations.find(row=>row.id===id);
+      const spec=cat().decorations.find(row=>row.id===decoration?.definitionID);
+      if (spec) G.confirm(t("升级装饰","Upgrade decoration"),t(spec.name)+" · "+coins(spec.price*2**Math.min(40,decoration.level)),
+        "/api/decorations/upgrade",{id});
+    }
     if (action === "basket") basket();
     if (action === "aquarium-resident") aquariumResident(id);
     if (action === "pond" || action === "aquarium") {
       aquarium = action === "aquarium";
+      immersive = false;
       aquarium && G.state.cast ? await G.act("/api/fish/cancel") : G.render();
+    }
+    if (action==="fishing-spot" && !G.state.cast) { fishingSpot=Number(id);G.render(); }
+    if (action==="immersive") { immersive=!immersive;G.render(); }
+    if (action==="farm-tool") {
+      farmTool=id;G.render();
+      if(id==="seed" && lib().farmPlots.some(row=>row.id===selectedPlot && !row.cropID)) plotDialog(selectedPlot);
     }
     if (action === "sell-animal") G.confirm(t("出售牲畜？","Sell this animal?"),t("动物与待收取产物将结算为金币。","The animal and pending products will be exchanged for coins."),"/api/pasture/sell",{id});
     if (action === "sell-all") G.confirm(t("出售全部渔获？","Sell all fish?"),t("鱼篓中的鱼将结算为金币。","Fish in the basket will be exchanged for coins."),"/api/fish/sell",{});
@@ -241,7 +307,10 @@
     if (["buy-decoration","upgrade-decoration"].includes(action)) decorations();
     if (["sell-fish","move-fish"].includes(action)) basket();
     if (["plant","harvest","buy-animal","return-fish"].includes(action)) G.closeModal();
-    if (action === "reel" && response.result?.hooked) G.notice(t("钓到","Caught")+" "+t(response.result.name)+" "+"★".repeat(response.result.rarity));
+    if (action === "reel" && response.result?.hooked) {
+      const caught=cat().fish.find(spec=>spec.id===response.result.fishID);
+      if(caught) showCatch(caught);
+    }
     if (response.result?.coins > 0) G.notice("+"+coins(response.result.coins));
   });
 
@@ -268,6 +337,23 @@
   window.EstateUI = {
     render(section) { return ({farm,pasture,fishing,index}[section] || index)(); },
     bind(section) {
+      const host=document.querySelector("[data-estate-mode]");
+      const mode=host?.dataset.estateMode;
+      if(mode) window.EstateWorld?.mount(host,mode,{
+        selectedID:{farm:selectedPlot,pasture:selectedAnimal,aquarium:selectedFish}[mode],spot:fishingSpot,
+        label:t("乐园三维场景。方向键调整视角，Page Up 或 Page Down 选择物件，回车打开。",
+          "Playground 3D world. Use arrow keys for the camera, Page Up or Page Down to select, and Enter to open."),
+        onSelect:id=>{
+          if(!id) return;
+          if(mode==="farm") choosePlot(id);
+          else if(mode==="pasture") chooseAnimal(id);
+          else if(mode==="aquarium") { selectedFish=id;aquariumResident(id); }
+          else if(id==="bobber" && G.state.cast?.biteAt<=G.currentClock()) document.querySelector('[data-action="estate:reel"]')?.click();
+        },
+        onMove:async (id,x,z)=>mode==="pasture" && lib().pastureAnimals.length>0 && Boolean(await G.act("/api/pasture/move",{
+          id,index:window.EstateWorld.targetIndex(x,z,lib().pastureAnimals.length)
+        }))
+      });
       if (section !== "pasture") return;
       document.querySelectorAll("[data-resident]").forEach(slot => {
         slot.addEventListener("dragstart",event => {
@@ -288,6 +374,7 @@
     leave(oldPage,oldSection,page,section) {
       if (oldPage === "playground" && oldSection === "fishing" && (page !== "playground" || section !== "fishing")) {
         aquarium = false;
+        immersive = false;
         if (G.state.cast) G.act("/api/fish/cancel",{},{render:false});
       }
     },

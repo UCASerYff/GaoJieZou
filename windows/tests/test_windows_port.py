@@ -42,7 +42,7 @@ def ready(tmp_path: Path, moment=None) -> tuple[RhythmStore, Clock]:
 
 
 def test_version_label():
-    assert VERSION_LABEL == "4.12+2"
+    assert VERSION_LABEL == "4.12+3"
 
 
 def test_create_preserves_unknown_field_and_omits_owned_animals(tmp_path):

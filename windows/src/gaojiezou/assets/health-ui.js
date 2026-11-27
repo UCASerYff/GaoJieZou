@@ -147,7 +147,7 @@
   }
 
   function reserves() {
-    return `<div class="health-grid health-three">${[
+    return `<div class="health-grid health-three health-reserves">${[
       ["水分", "Water", "water", "drop.fill", "blue"], ["饱食", "Food", "food", "fork.knife", "orange"],
       ["活力", "Energy", "energy", "bolt.fill", "green"],
     ].map(([cn, en, key, glyph, color]) => `<div class="health-reserve" data-color="${color}">
@@ -156,6 +156,7 @@
   }
 
   function islandArt(withPlacements = false) {
+    if (window.IslandWorld) return window.IslandWorld.render(!withPlacements);
     const labels = Object.fromEntries((g().state.catalog.islandRecipes || []).map((item) => [item.id, item.name]));
     const pins = !withPlacements ? "" : Object.entries(h().island.placements || {}).map(([key, point]) =>
       `<span class="island-pin" style="left:${50 + Number(point.x) * 6}%;top:${52 + Number(point.z) * 5}%">${g().localized(labels[key] || key)}</span>`).join("");
@@ -405,9 +406,10 @@
     const requirement = scene.expansionRequirement || [100, 240, 370][scene.expansionLevel];
     const next = scene.nextThreshold;
     const base = ISLAND_MARKS[scene.level - 1] || 0;
-    return title + reserves() + `<div class="health-island-wrapper">${islandArt(true)}
-      <div class="health-inline">${button(t("布置建筑", "Arrange buildings"), "island-layout", "", { disabled: !scene.buildings.length, icon: "grid" })}
-        ${scene.buildings.includes("teaHouse") ? button(t("茶亭休憩", "Tea break"), "island-tea", "", { disabled: scene.paused }) : ""}</div></div>`
+    const legacyControls = window.IslandWorld ? "" : `<div class="health-inline">
+      ${button(t("布置建筑", "Arrange buildings"), "island-layout", "", { disabled: !scene.buildings.length, icon: "grid" })}
+      ${scene.buildings.includes("teaHouse") ? button(t("茶亭休憩", "Tea break"), "island-tea", "", { disabled: scene.paused }) : ""}</div>`;
+    return title + reserves() + `<div class="health-island-wrapper">${islandArt(true)}${legacyControls}</div>`
       + card(next ? `Lv.${scene.level}` : t("传奇之岛", "Legendary island"), caption(next ?
         t(`繁荣度 ${scene.prosperity} · 距下一级还需 ${next - scene.prosperity}`, `${scene.prosperity} prosperity · ${next - scene.prosperity} to next level`) :
         t(`繁荣度 ${scene.prosperity}`, `${scene.prosperity} prosperity`))
@@ -742,6 +744,7 @@
       Object.assign(ui, { eventFilter: event.target.value, eventPage: 0 });
       g().render();
     });
+    window.IslandWorld?.bind(h()?.island, g().state.catalog);
     if (section === "island" && !visited && h()?.preferences.gameEnabled) {
       visited = true;
       void post("island/visit");
@@ -749,7 +752,10 @@
   }
 
   function leave(oldPage, oldSection, nextPage, nextSection) {
-    if (oldPage !== nextPage || oldSection !== nextSection) visited = false;
+    if (oldPage !== nextPage || oldSection !== nextSection) {
+      visited = false;
+      window.IslandWorld?.leave();
+    }
   }
 
   window.HealthUI = { render, bind, actions, leave };

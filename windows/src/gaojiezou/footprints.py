@@ -24,6 +24,7 @@ from pathlib import Path
 
 from gaojiezou.catalog import TRAIN_CARRIAGES, train_upgrade_cost
 from gaojiezou.errors import AppError
+from gaojiezou.heic import heif_extension
 from gaojiezou.library import dumps
 from gaojiezou.resources import asset_dir
 from gaojiezou.timeutil import cocoa, from_cocoa
@@ -892,9 +893,4 @@ def _image_extension(content):
         return ".gif"
     if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
         return ".webp"
-    if content[4:8] == b"ftyp":
-        if content[8:12] in {b"heic", b"heix", b"hevc", b"hevx"}:
-            return ".heic"
-        if content[8:12] in {b"mif1", b"msf1"}:
-            return ".heif"
-    return None
+    return heif_extension(content)

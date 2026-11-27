@@ -1,0 +1,62 @@
+.gao-world-canvas {
+  position: absolute; inset: 0; width: 100%; height: 100%; display: block;
+  touch-action: none; cursor: grab; outline-offset: -4px;
+}
+.gao-world-canvas:active { cursor: grabbing; }
+.has-webgl-world { isolation: isolate; }
+.game-scene {
+  width: min(100%, calc(max(440px, 100dvh - 143px) * 1.7768));
+  margin-inline: auto;
+}
+.game-scene .gao-world-canvas { z-index: -1; }
+.game-scene.has-webgl-world .scene-plot-row { display: none; }
+.farm-scene.has-webgl-world,.pasture-scene.has-webgl-world { background: #c4c9c7; }
+.farm-scene.has-webgl-world > img,.pasture-scene.has-webgl-world > img,.aquarium-scene.has-webgl-world > img { visibility: hidden; }
+.aquarium-scene.has-webgl-world { background: #164050 url("/art/AquariumPanoramaV352.png") center/cover; }
+.estate-overlay {
+  position: absolute; left: 50%; top: 15%; transform: translateX(-50%);
+  display: grid; justify-items: center; gap: 6px; color: #fff; text-align: center; width: max-content; max-width: 92%;
+  pointer-events: none; text-shadow: 0 1px 6px #10221dc0;
+}
+.estate-overlay button,.estate-overlay .row { pointer-events: auto; }
+.estate-overlay h2 { font-size: 23px; }
+.scene-toolbar,.scene-hud { pointer-events: none; }
+.scene-toolbar button,.scene-hud button,.owned-decoration-strip button { pointer-events: auto; }
+.scene-toolbar {
+  padding: 6px 9px; left: 50%; right: auto; width: max-content; max-width: 94%;
+  transform: translateX(-50%); border-radius: 15px; background: #111b1668;
+}
+.estate-button-active { color: #fff; background: #365c4dec; border-color: #7eaa8d; }
+.estate-button-active:hover:not(:disabled) { color: #fff; background: #47725e; }
+.owned-decoration-strip {
+  position: absolute; top: 13%; left: 3%; display: flex; gap: 4px; max-width: 42%;
+  overflow: auto; padding: 4px; border-radius: 9px; background: #1a251cd0;
+}
+.owned-decoration-strip button { min-width: 43px; max-height: 42px; padding: 4px; }
+.estate-empty-aquarium { top: 48%; width: auto; transform: translate(-50%,-50%); padding: 8px 13px; border-radius: 20px; background: #10251eaa; }
+.estate-exit-immersive { position: absolute; top: 4%; right: 4%; }
+.fp-train-world,.fp-train-interior {
+  position: relative; overflow: hidden; border-radius: 22px; background: #b3d7e8;
+  width: 100%;
+}
+.fp-train-world { height: clamp(310px,51vh,510px); }
+.fp-train-world.has-webgl-world + .fp-train-scene { display: none; }
+.fp-train-interior { height: 310px; background: #626f68; }
+.fp-train-world-caption {
+  position: absolute; inset: 14px 16px auto; pointer-events: none; color: #fff;
+  text-shadow: 0 1px 5px #111, 0 1px 12px #24342e;
+}
+.fp-train-world-caption strong { display: block; font-size: 18px; }
+.fp-train-world-caption span { font-size: 12px; }
+.fp-3d-info {
+  position: absolute; inset: auto 12px 12px; background: var(--panel); border: 1px solid var(--line);
+  padding: 8px 11px; border-radius: 10px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px;
+}
+@media (max-width: 600px) {
+  .estate-overlay { top: 16%; gap: 3px; }
+  .estate-overlay h2 { font-size: 15px; }
+  .estate-overlay small { font-size: 10px; }
+  .estate-overlay button,.scene-toolbar button { min-height: 25px; padding: 3px 6px; }
+  .owned-decoration-strip { top: 17%; }
+  .fp-train-interior { height: 240px; }
+}

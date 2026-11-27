@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, urlparse
 
 from gaojiezou.errors import AppError
 from gaojiezou.footprints import search_cities
+from gaojiezou.heic import HEIF_MIME, heif_preview
 from gaojiezou.resources import artwork, asset_dir, english_strings
 from gaojiezou.store import RhythmStore, focus_csv, habit_csv, sleep_csv
 from gaojiezou.timeutil import add_days, parse_instant
@@ -65,13 +66,16 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/api/footprints/photo":
             if not self._authorized():
                 return
-            photo_id = parse_qs(parsed.query).get("id", [""])[0]
+            params = parse_qs(parsed.query)
+            photo_id = params.get("id", [""])[0]
             try:
                 with self.server.lock:
                     content, mime = self.server.store.footprints.photo(photo_id)
+                if params.get("preview", [""])[0] == "1" and mime in HEIF_MIME:
+                    content, mime = heif_preview(content), "image/png"
                 self._bytes(content, mime)
             except AppError as exc:
-                self._json({"error": exc.message}, 404)
+                self._json({"error": exc.message, "code": exc.code}, 422 if exc.code in {"codec", "invalid"} else 404)
             return
         if parsed.path == "/localization/en.json":
             self._json(english_strings())
@@ -148,6 +152,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
         if not self._authorized():
+            return
+        if parsed.path == "/api/footprints/photo/preview":
+            try:
+                payload = self._body()
+                content = base64.b64decode(payload.get("contentBase64", ""), validate=True)
+                self._bytes(heif_preview(content), "image/png")
+            except AppError as exc:
+                self._json({"error": exc.message, "code": exc.code}, 422)
+            except (TypeError, ValueError, binascii.Error):
+                self._json({"error": "照片上传数据无效。", "code": "invalid"}, 400)
             return
         if parsed.path == "/api/shutdown":
             try:

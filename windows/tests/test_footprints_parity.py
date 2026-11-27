@@ -1,16 +1,34 @@
 import base64
 import json
+import os
 import sqlite3
+import struct
+import sys
+import zlib
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from gaojiezou.errors import AppError
 from gaojiezou.footprints import FootprintStore, compute_metrics, load_cities, search_cities
+from gaojiezou.heic import heif_extension, heif_preview
 from gaojiezou.resources import asset_dir
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
+# Synthetic red and green rectangles, encoded as a 96 by 64 HEVC still.
+HEIC = base64.b64decode(
+    "AAAAHGZ0eXBoZWljAAAAAG1pZjFoZWljbWlhZgAAAVZtZXRhAAAAAAAAACFoZGxyAAAAAAAA"
+    "AABwaWN0AAAAAAAAAAAAAAAAAAAAACJpbG9jAAAAAERAAAEAAQAAAAABegABAAAAAAAAAJUA"
+    "AAAjaWluZgAAAAAAAQAAABVpbmZlAgAAAAABAABodmMxAAAAAA5waXRtAAAAAAABAAAA1mlw"
+    "cnAAAAC3aXBjbwAAAHhodmNDAQNwAAAAkAAAAAAAHvAA/P34+AAADwNgAAEAGEABDAH//wNw"
+    "AAADAJAAAAMAAAMAHroCQGEAAQArQgEBA3AAAAMAkAAAAwAAAwAeoDCBBZbqSSmubgIaDAgA"
+    "AAMAyAAAAwAIQGIAAQAHRAHBcrAiQAAAABNjb2xybmNseAABAA0ABoAAAAAUaXNwZQAAAAAA"
+    "AABgAAAAQAAAABBwaXhpAAAAAAMICAgAAAAXaXBtYQAAAAAAAAABAAEEgQIDBAAAAJ1tZGF0"
+    "AAAAkSgBrwa4Y7Dc/9L0v//+26Pof7VKtBfJ69/zI/33QQ//+jYtyHhb051EvZh0eJaZwaY"
+    "1wb/DJONiyPs/Vu7VXMQ7RzShQLX8FYAdJk2kCEkGxH6Sogtb1bsPdsN7mnZNm6N6Xzn0fq"
+    "bR2eqTA1CxwVr+EPDOwwxQozGebDGCONDfQNW8c7YdXv8z1m/7IhfOhOA="
+)
 NOW = datetime(2026, 11, 27, 8, tzinfo=timezone.utc)
 
 
@@ -34,6 +52,48 @@ def test_offline_atlas_uses_province_ids_and_search_matches_pinyin_and_english()
     assert search_cities("bei jing")[0]["id"] == "cn-110000"
     assert search_cities("New York")[0]["english"].startswith("New York")
     assert all(city["countryID"] == "FRA" for city in search_cities("", country="FRA"))
+
+
+def test_ctamap_uses_curated_codes_and_real_wuhan_boundary():
+    atlas = json.loads((asset_dir() / "footprints-prefectures.json").read_bytes())
+    assert atlas["source"]["license"] == "CC BY 4.0"
+    assert len(atlas["provinces"]) == 34
+    catalog_ids = {city["id"] for city in atlas["cities"]}
+    areas = {area["id"]: area["rings"] for area in atlas["prefectures"]}
+    assert len(areas) >= 340
+    assert areas.keys() <= catalog_ids
+    wuhan = [point for ring in areas["cn-420100"] for point in ring]
+    assert min(x for x, _ in wuhan) < 114.3 < max(x for x, _ in wuhan)
+    assert min(y for _, y in wuhan) < 30.6 < max(y for _, y in wuhan)
+
+
+def test_heic_asset_keeps_legacy_original_and_identifies_hevc_brands(store):
+    assert heif_extension(HEIC) == ".heic"
+    assert heif_extension(b"\x00\x00\x00\x01ftypheic") is None
+    visit = store.save_visit({"cityID": "cn-420100"}, NOW)
+    photo = store.add_photo(visit["id"], "synthetic.heic", HEIC, NOW)
+    assert store.photo(photo["id"]) == (HEIC, "image/heic")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="WIC is a Windows runtime feature")
+def test_wic_decodes_genuine_heic_pixels():
+    try:
+        png = heif_preview(HEIC)
+    except AppError as exc:
+        if exc.code == "codec" and os.environ.get("GAOJIEZOU_TEST_REQUIRE_HEIC") != "1":
+            pytest.skip("This Windows test host needs the HEIF and HEVC extensions")
+        raise
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height = struct.unpack_from(">II", png, 16)
+    assert (width, height) == (96, 64)
+    length, kind = struct.unpack_from(">I4s", png, 33)
+    assert kind == b"IDAT"
+    pixels = zlib.decompress(png[41:41 + length])
+    stride = width * 3 + 1
+    left = 20 * stride + 1 + 12 * 3
+    right = 20 * stride + 1 + 76 * 3
+    assert pixels[left] > 200 and pixels[left + 1] < 50
+    assert pixels[right] < 60 and pixels[right + 1] > 125
 
 
 def test_atomic_multi_city_visit_reuse_photos_and_preserve_trip_links_on_undo(store):

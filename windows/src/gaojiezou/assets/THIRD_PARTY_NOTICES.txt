@@ -6,7 +6,13 @@ https://github.com/nvkelso/natural-earth-vector
 采用 1:50m 国家/地区边界与 1:10m Populated Places；城市坐标和多语言名称离线打包。
 中国世界统计归属合并 CHN / TWN / HKG / MAC；世界图几何保留来源细节，不构成任何权威边界声明。
 
-Windows 中国省级地图：geoBoundaries CHN ADM1（2019），Public Domain，原始资料由 geoBoundaries 和 Wikimedia Commons 提供。几何按目录省级编号映射，坐标保留四位小数。
+Windows 中国地级地图与省级边框：CTAmap v2.0，2026-01-01 WGS84。Rui Cheng、Chiwei Xiao、Yanjun Wang、Yunfeng Hu。CC BY 4.0。
+https://doi.org/10.5281/zenodo.22179207
+https://www.shengshixian.com/pages/d35ae5/
+https://creativecommons.org/licenses/by/4.0/
+按六位区划代码关联历史收藏单元，简化多边形并保留四位坐标小数。重建入口为 windows/generate_footprints_prefectures.py。图片导出带有数据署名。
+
+Windows 备用中国省级地图：geoBoundaries CHN ADM1（2019），Public Domain，原始资料由 geoBoundaries 和 Wikimedia Commons 提供。几何按目录省级编号映射，坐标保留四位小数。
 https://www.geoboundaries.org/api/current/gbOpen/CHN/ADM1/
 https://commons.wikimedia.org/wiki/File:China_blank_province_map.svg
 固定下载地址和原文件 SHA-256 随 footprints-atlas.json 提供，重建入口为 windows/generate_footprints_atlas.py。
@@ -18,11 +24,16 @@ Windows 继续读取已有的离线地名、收集单元编号及坐标，用于
 
 地图渲染在本机离线运行。
 
+Windows 原生通知：PyWinRT 3.2.1（MIT License）。
+https://github.com/pywinrt/pywinrt/tree/v3.2.1
+
 第三方许可全文：
 
 MIT License
 
 Copyright (c) 2025 圈集
+Copyright (c) Microsoft Corporation. All rights reserved.
+Copyright (c) 2021-2025 David Lechner <david@pybricks.com>
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -56,7 +56,8 @@
     download: '<path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/>',
     edit: '<path d="m4 16-1 5 5-1L20 8l-4-4-12 12Zm10-10 4 4"/>',
     trash: '<path d="M4 6h16m-11 0V3h6v3M6 6l1 15h10l1-15m-8 3v8m4-8v8"/>',
-    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'
+    more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+    eye: '<path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.5"/>'
   };
   const aliases = {
     "sun.max.fill": "sun", "checkmark.circle.fill": "check", "flag.checkered": "flag", "tray.full.fill": "tray",
@@ -216,6 +217,7 @@
   const formBody = form => Object.fromEntries(new FormData(form));
   function modal(title, html, onSubmit, options = {}) {
     const form = editor.querySelector("form");
+    window.GaoWorld?.releaseWithin(form);
     editor.querySelector("h2").textContent = title;
     editor.querySelector(".dialog-body").innerHTML = html;
     editor.querySelector(".dialog-error").hidden = true;
@@ -316,6 +318,7 @@
   }
   function render() {
     if (!state) return;
+    window.GaoWorld?.releaseWithin(app);
     navigation();
     app.dataset.workspace = page;
     app.dataset.section = section;
@@ -388,6 +391,7 @@
   editor.addEventListener("click",event => {
     if ((event.target === editor || event.target.closest("[data-close]")) && !editor.querySelector("form").dataset.saving) closeModal();
   });
+  editor.addEventListener("close", () => window.GaoWorld?.releaseWithin(editor));
   editor.addEventListener("cancel",event => {
     event.preventDefault();
     if (!editor.querySelector("form").dataset.saving) closeModal();

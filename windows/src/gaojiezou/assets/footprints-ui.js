@@ -218,6 +218,7 @@
     return `<section class="fp-workspace">
       ${heading(text("旅行列车", "Travel train"), text("真实足迹铺成线路，旅途回忆装满车厢。", "Real visits make routes, and travel memories fill the cars."),
         `<span class="fp-chip">${escape(text(`${train.materials} 旅途物资`, `${train.materials} supplies`))}</span>`)}
+      <div class="fp-train-world" hidden></div>
       <div class="fp-train-scene"><div class="fp-train-track" aria-hidden="true"></div>
         <div class="fp-train-consist" aria-label="${escape(text("当前车厢", "Current cars"))}"><span class="fp-engine" aria-label="${escape(text("车头", "Engine"))}">◆</span>
         ${visualCars.join("")}</div></div>
@@ -407,11 +408,18 @@
   async function loadAtlas() {
     if (ui.atlas) return ui.atlas;
     if (!ui.atlasPending) {
-      ui.atlasPending = fetch("/footprints-atlas.json").then(response => {
+      const basemap = fetch("/footprints-atlas.json").then(response => {
         if (!response.ok) throw new Error(text("无法打开离线地图。", "Could not open offline map."));
         return response.json();
-      }).then(atlas => {
-        const south = compileBasemap(atlas.china, "china", ring => ring.every(([, lat]) => lat <= 20.5));
+      });
+      const chinaDetails = fetch("/footprints-prefectures.json").then(response => response.ok ? response.json() : null).catch(() => null);
+      ui.atlasPending = Promise.all([basemap, chinaDetails]).then(([atlas, details]) => {
+        const provinceRows = details?.provinces?.length ? details.provinces : atlas.china;
+        const mainRing = ring => ring.some(([, lat]) => lat >= 17.8);
+        const southRing = ring => ring.every(([, lat]) => lat <= 20.5);
+        const south = compileBasemap(provinceRows, "china", southRing);
+        const cityRows = details?.prefectures || [];
+        const southCities = compileBasemap(cityRows, "china", southRing);
         if (south.regions.length) {
           for (const [lon, lat] of [[108, 15], [114, 15], [108, 20.5], [114, 20.5]]) {
             const [x, y] = project(lon, lat, "china");
@@ -420,11 +428,21 @@
             south.bounds[2] = Math.max(south.bounds[2], x);
             south.bounds[3] = Math.max(south.bounds[3], y);
           }
+          if (southCities.regions.length) {
+            south.bounds[0] = Math.min(south.bounds[0], southCities.bounds[0]);
+            south.bounds[1] = Math.min(south.bounds[1], southCities.bounds[1]);
+            south.bounds[2] = Math.max(south.bounds[2], southCities.bounds[2]);
+            south.bounds[3] = Math.max(south.bounds[3], southCities.bounds[3]);
+          }
         }
+        if (details?.cities) rememberCities(details.cities);
         ui.atlas = {
           world: compileBasemap(atlas.world, "world"),
-          china: compileBasemap(atlas.china, "china", ring => ring.some(([, lat]) => lat >= 17.8)),
+          china: compileBasemap(provinceRows, "china", mainRing),
+          chinaCities: compileBasemap(cityRows, "china", mainRing),
           south,
+          southCities,
+          chinaCredits: cityRows.length ? "Cheng et al. · CTAmap v2.0 · CC BY 4.0" : "",
         };
         return ui.atlas;
       }).finally(() => {
@@ -458,15 +476,17 @@
       [key, css.getPropertyValue(`--fp-map-${key}`).trim()]));
   }
 
-  function drawRegions(ctx, map, transform, color, visited, selected, scope) {
+  function drawRegions(ctx, map, transform, color, visited, selected, scope, outlinesOnly = false) {
     ctx.save();
     ctx.transform(transform.scale, 0, 0, transform.scale, transform.dx, transform.dy);
-    ctx.lineWidth = 0.65 / transform.scale;
-    ctx.strokeStyle = color.edge;
+    ctx.lineWidth = (outlinesOnly ? 1 : 0.65) / transform.scale;
+    ctx.strokeStyle = outlinesOnly ? color.label + "88" : color.edge;
     for (const region of map.regions) {
       const id = scope === "china" ? region.id : region.countryID;
-      ctx.fillStyle = visited.has(id) ? color.visited : color.land;
-      ctx.fill(region.path, "evenodd");
+      if (!outlinesOnly) {
+        ctx.fillStyle = visited.has(id) ? color.visited : color.land;
+        ctx.fill(region.path, "evenodd");
+      }
       ctx.stroke(region.path);
       if (id === selected) {
         ctx.save();
@@ -534,11 +554,23 @@
     }
     if (opts.label) {
       ctx.font = "11px 'Segoe UI', sans-serif";
+      const width = ctx.measureText(city.name).width + 6;
+      const layout = opts.layout;
+      const positions = [[x + 7, y - 6], [x - width - 7, y - 6], [x - width / 2, y - 14], [x - width / 2, y + 21]];
+      const position = positions.find(([left, baseline]) =>
+        !layout || (left >= 4 && left + width <= layout.width - 4 && baseline >= 12 && baseline <= layout.height - 3 &&
+          !layout.bounds.some(([placedX, placedY, placedWidth]) =>
+            left + width + 3 > placedX && left - 3 < placedX + placedWidth && Math.abs(baseline - placedY) < 14)));
+      if (!position) {
+        ctx.restore();
+        return;
+      }
+      if (layout) layout.bounds.push([...position, width]);
       ctx.lineWidth = 3;
       ctx.strokeStyle = color.sheet;
-      ctx.strokeText(city.name, x + 8, y - 5);
+      ctx.strokeText(city.name, ...position);
       ctx.fillStyle = color.label;
-      ctx.fillText(city.name, x + 8, y - 5);
+      ctx.fillText(city.name, ...position);
     }
     ctx.restore();
   }
@@ -595,17 +627,27 @@
     const { journey = null, labels = true, imprint = "", output = false } = settings;
     const scope = journey ? (journey.origin.countryID === "CHN" && journey.destination.countryID === "CHN" ? "china" : "world") : ui.scope;
     const width = output ? 760 : Math.round(canvas.clientWidth);
-    const height = output ? 465 : Math.round(canvas.clientHeight);
+    const fullHeight = output ? 465 : Math.round(canvas.clientHeight);
+    const height = output ? 374 : fullHeight;
     if (width < 1 || height < 1) return;
     const ratio = output ? 3 : Math.min(window.devicePixelRatio || 1, 3);
-    if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(height * ratio)) {
+    if (canvas.width !== Math.round(width * ratio) || canvas.height !== Math.round(fullHeight * ratio)) {
       canvas.width = Math.round(width * ratio);
-      canvas.height = Math.round(height * ratio);
+      canvas.height = Math.round(fullHeight * ratio);
     }
     const palette = settings.palette || mapPalette(canvas);
     const ctx = canvas.getContext("2d");
     ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, width, fullHeight);
+    if (output) {
+      ctx.fillStyle = palette.sheet;
+      ctx.fillRect(0, 0, width, fullHeight);
+      ctx.save();
+      ctx.translate(0, 64);
+      ctx.beginPath();
+      ctx.rect(0, 0, width, height);
+      ctx.clip();
+    }
     ctx.fillStyle = palette.water;
     ctx.fillRect(0, 0, width, height);
     ctx.save();
@@ -614,25 +656,35 @@
     for (let i = 0; i < 1000; i++) ctx.fillRect((i * 7919 % 10007) / 10007 * width, (i * 3571 % 10009) / 10009 * height, 1, 1);
     ctx.restore();
     const atlas = ui.atlas[scope];
+    const cityLayer = !journey && scope === "china" ? ui.atlas.chinaCities : null;
+    const hasCities = Boolean(cityLayer?.regions.length);
     const transform = atlasTransform(atlas.bounds, width, height, journey || output ? 1 : ui.zoom,
       journey || output ? 0 : ui.panX, journey || output ? 0 : ui.panY, width < 450 ? 34 : 58);
     const places = journey ? [] : mapPlaces().filter(city => scope === "world" || city.countryID === "CHN");
-    const visited = new Set(places.map(city => scope === "china" ? city.provinceID : city.countryID));
+    const visited = new Set(places.filter(city => !hasCities || city.id === `cn-${city.provinceID}`)
+      .map(city => scope === "china" ? city.provinceID : city.countryID));
+    const visitedCities = new Set(places.map(city => city.id));
     const selectedRegion = scope === "china" ? atlas.regions.find(region => region.name === ui.province)?.id : ui.country;
     drawGrid(ctx, scope, transform, palette);
-    drawRegions(ctx, atlas, transform, palette, visited, selectedRegion, scope);
+    drawRegions(ctx, atlas, transform, palette, visited, output ? "" : selectedRegion, scope);
+    if (hasCities) {
+      drawRegions(ctx, cityLayer, transform, palette, visitedCities, output ? "" : ui.selected, scope);
+      drawRegions(ctx, atlas, transform, palette, new Set(), output ? "" : selectedRegion, scope, true);
+    }
     const home = data().residentCity;
-    const selected = cityByID(ui.selected);
-    const pins = places.map(city => ({ city, opts: {} }));
+    const selected = output ? null : cityByID(ui.selected);
+    const pins = places.filter(city => city.id !== home?.id).map(city => ({ city, opts: {} }));
     if (!journey && selected && !pins.some(item => item.city.id === selected.id)) {
       pins.push({ city: selected, opts: { outline: true } });
     }
-    if (!journey && home) pins.push({ city: home, opts: { home: true } });
+    if (!journey && home) pins.unshift({ city: home, opts: { home: true } });
     const mainPins = [];
+    const layout = { width, height, bounds: [] };
+    if (!output) layout.bounds.push([15, 32, 185], [15, 46, 185]);
     for (const { city, opts } of pins) {
       if (scope === "china" && (city.countryID !== "CHN" || city.latitude < 17.8)) continue;
       const [x, y] = toPixel(project(city.longitude, city.latitude, scope), transform);
-      drawPin(ctx, x, y, city, palette, { ...opts, label: labels && (places.length < 14 || ui.zoom >= 2 || city.id === ui.selected || opts.home) });
+      drawPin(ctx, x, y, city, palette, { ...opts, label: labels, layout });
       mainPins.push({ city, x, y });
     }
     let inset;
@@ -652,6 +704,10 @@
       ctx.stroke();
       ctx.clip();
       drawRegions(ctx, south, local, palette, visited, "", scope);
+      if (hasCities) {
+        drawRegions(ctx, ui.atlas.southCities, local, palette, visitedCities, output ? "" : ui.selected, scope);
+        drawRegions(ctx, south, local, palette, new Set(), "", scope, true);
+      }
       for (const { city, opts } of pins) {
         if (city.countryID !== "CHN" || city.latitude >= 17.8) continue;
         const [px, py] = toPixel(project(city.longitude, city.latitude, scope), local);
@@ -662,33 +718,53 @@
       ctx.font = "9px 'Segoe UI', sans-serif";
       ctx.fillText(text("南部海域", "Southern coastal area"), x + 7, y + h - 7);
       ctx.restore();
-      inset = { x, y, width: insetWidth, height: h, transform: local, atlas: south };
+      inset = { x, y, width: insetWidth, height: h, transform: local, atlas: south, cityLayer: ui.atlas.southCities };
     }
     if (journey) drawJourney(ctx, journey, scope, transform, palette);
-    ctx.fillStyle = palette.label;
-    ctx.font = "19px 'Noto Serif SC', 'SimSun', Georgia, serif";
     const title = journey ? text("巡游线路", "Cruise route") : scope === "china" ? text("神州行记", "China atlas") : text("世界航海志", "World atlas");
-    ctx.fillText(output ? text(`我的足迹 · ${title}`, `My footprints · ${title}`) : title, 17, 28);
-    ctx.font = "9px 'Segoe UI', sans-serif";
-    const allPlaces = output ? mapPlaces() : [];
-    const regionCount = new Set(allPlaces.filter(city => city.countryID !== "ATA").map(city => city.countryID)).size;
-    const atlasSubtitle = output ? text(`${allPlaces.length} 座城市 · ${regionCount} 个国家 / 地区`, `${allPlaces.length} cities · ${regionCount} countries / regions`) :
-      `A PERSONAL ATLAS · ${scope.toUpperCase()}`;
-    ctx.fillText(journey ? `${journey.origin.name} → ${journey.destination.name}` : atlasSubtitle, 18, 43);
-    ctx.fillStyle = palette.dot;
-    ctx.beginPath();
-    ctx.arc(18, height - 13, 3, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.fillStyle = palette.label;
-    ctx.fillText(scope === "china" ? text("去过 · 省级轮廓", "Visited · Provincial outlines") :
-      text("去过 · 国家或地区", "Visited · Countries or regions"), 25, height - 10);
-    if (imprint) {
+    const credits = scope === "china" && ui.atlas.chinaCredits ?
+      (output ? "Cheng et al. · CTAmap v2.0 · CC BY 4.0 · doi:10.5281/zenodo.22179207" : ui.atlas.chinaCredits) : "";
+    if (output) {
+      ctx.restore();
+      const allPlaces = mapPlaces().filter(city => city.countryID !== "ATA");
+      const regionCount = new Set(allPlaces.map(city => city.countryID)).size;
+      const period = ui.year ? text(` · ${ui.year} 年`, ` · ${ui.year}`) : "";
+      ctx.fillStyle = palette.label;
+      ctx.font = "24px 'Noto Serif SC', 'SimSun', Georgia, serif";
+      ctx.fillText(text(`我的足迹 · ${title}`, `My footprints · ${title}`), 24, 30);
+      ctx.font = "12px 'Segoe UI', sans-serif";
+      ctx.fillText(text(`${allPlaces.length} 座城市 · ${regionCount} 个国家 / 地区`, `${allPlaces.length} cities · ${regionCount} countries / regions`) + period, 25, 51);
+      if (imprint) {
+        ctx.textAlign = "right";
+        ctx.font = "16px 'Segoe UI', sans-serif";
+        ctx.fillText(imprint, width - 24, 35, width / 3);
+        ctx.textAlign = "left";
+      }
+      ctx.font = "9px 'Segoe UI', sans-serif";
+      ctx.textAlign = credits ? "left" : "center";
+      ctx.fillText(text("搞足迹  /  THE ATLAS OF YOUR LIFE", "GAO FOOTPRINTS  /  THE ATLAS OF YOUR LIFE"), credits ? 20 : width / 2, fullHeight - 10);
+      ctx.textAlign = "left";
+    } else {
+      ctx.fillStyle = palette.label;
+      ctx.font = "19px 'Noto Serif SC', 'SimSun', Georgia, serif";
+      ctx.fillText(title, 17, 28);
+      ctx.font = "9px 'Segoe UI', sans-serif";
+      ctx.fillText(journey ? `${journey.origin.name} → ${journey.destination.name}` : `A PERSONAL ATLAS · ${scope.toUpperCase()}`, 18, 43);
+      ctx.fillStyle = palette.dot;
+      ctx.beginPath();
+      ctx.arc(18, height - 13, 3, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.fillStyle = palette.label;
+      const marker = hasCities ? text("去过 · 城市轮廓", "Visited · City outlines") : text("去过 · 省级轮廓", "Visited · Provincial outlines");
+      ctx.fillText(scope === "china" ? marker : text("去过 · 国家或地区", "Visited · Countries or regions"), 25, height - 10);
+    }
+    if (credits) {
+      ctx.font = "9px 'Segoe UI', sans-serif";
       ctx.textAlign = "right";
-      ctx.font = "16px 'Segoe UI', sans-serif";
-      ctx.fillText(imprint, width - 17, 28, width / 3);
+      ctx.fillText(credits, width - 12, fullHeight - 10, width * 0.62);
       ctx.textAlign = "left";
     }
-    if (!journey && !output) ui.mapFrame = { pins: mainPins, scope, transform, inset, atlas, context: ctx };
+    if (!journey && !output) ui.mapFrame = { pins: mainPins, scope, transform, inset, atlas, cityLayer, context: ctx };
   }
 
   function zoomMap(value) {
@@ -708,7 +784,8 @@
     const frame = ui.mapFrame;
     if (!frame) return;
     const { pins, scope, inset } = frame;
-    const nearest = [...pins].reverse().find(pin => Math.hypot(pin.x - x, pin.y - y) < 12);
+    const nearest = pins.map(pin => ({ pin, distance: Math.hypot(pin.x - x, pin.y - y) }))
+      .filter(item => item.distance < 12).sort((a, b) => a.distance - b.distance)[0]?.pin;
     if (nearest) {
       showCity(nearest.city.id);
       return;
@@ -721,8 +798,13 @@
     const ctx = frame.context;
     ctx.save();
     ctx.resetTransform();
+    const city = target.cityLayer && [...target.cityLayer.regions].reverse().find(item => ctx.isPointInPath(item.path, ...projected, "evenodd"));
     const region = [...target.atlas.regions].reverse().find(item => ctx.isPointInPath(item.path, ...projected, "evenodd"));
     ctx.restore();
+    if (city && cityByID(city.id)) {
+      showCity(city.id);
+      return;
+    }
     if (region) {
       ui.selected = null;
       ui.query = "";
@@ -849,13 +931,16 @@
         if (cache.photo.size < 24) break;
       }
     }
-    const promise = window.Gao.authorizedFetch(`/api/footprints/photo?id=${encodeURIComponent(id)}`).then(async response => {
+    const promise = window.Gao.authorizedFetch(`/api/footprints/photo?id=${encodeURIComponent(id)}&preview=1`).then(async response => {
       if (!response.ok) {
         const failure = await response.json().catch(() => ({}));
+        if (failure.code === "codec" || failure.code === "invalid") {
+          return { url: "", error: failure.error };
+        }
         throw new Error(failure.error || text("照片无法读取。", "Could not open the photo."));
       }
       const blob = await response.blob();
-      return { blob, url: URL.createObjectURL(blob) };
+      return { url: blob.type.startsWith("image/") ? URL.createObjectURL(blob) : "" };
     }).catch(error => {
       cache.photo.delete(id);
       throw error;
@@ -872,8 +957,8 @@
         image.hidden = false;
         if (image.previousElementSibling) image.previousElementSibling.hidden = true;
       });
-      photoEntry(image.dataset.fpPhoto).then(({ blob, url }) => {
-        if (image.isConnected && blob.type.startsWith("image/")) image.src = url;
+      photoEntry(image.dataset.fpPhoto).then(({ url }) => {
+        if (image.isConnected && url) image.src = url;
       }).catch(() => {});
     }
   }
@@ -882,16 +967,36 @@
     const photo = await photoEntry(id);
     const file = data().attachments.find(item => item.id === id)?.filename || "footprint-photo";
     const form = window.Gao.modal(text("足迹照片", "Footprint photo"), `<div class="fp-photo-preview">
-      <p id="fp-photo-fallback" hidden>${escape(text("可下载原文件并使用 Windows 照片查看。", "Download the file to open it in Windows Photos."))}</p>
+      <p id="fp-photo-fallback" hidden>${escape(photo.error || text("可下载原文件并使用 Windows 照片查看。", "Download the file to open it in Windows Photos."))}</p>
       <img id="fp-photo-full" alt="${escape(text("足迹附件", "Footprint attachment"))}" hidden>
       <button id="fp-save-original" type="button">${escape(text("下载原照片", "Download original"))}</button></div>`, null,
     { className: "fp-wide-dialog" });
     const image = $("#fp-photo-full", form);
     image.onload = () => { image.hidden = false; };
     image.onerror = () => { $("#fp-photo-fallback", form).hidden = false; };
-    if (photo.blob.type.startsWith("image/")) image.src = photo.url;
+    if (photo.url) image.src = photo.url;
     else $("#fp-photo-fallback", form).hidden = false;
-    $("#fp-save-original", form).onclick = () => downloadBlob(photo.blob, file);
+    $("#fp-save-original", form).onclick = () => window.Gao.download(`/api/footprints/photo?id=${encodeURIComponent(id)}`, file);
+  }
+
+  function photoBase64(blob) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result).split(",")[1]);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function wicPreview(file) {
+    const response = await window.Gao.authorizedFetch("/api/footprints/photo/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ contentBase64: await photoBase64(file) }),
+    });
+    if (response.ok && response.headers.get("Content-Type") === "image/png") return response.blob();
+    const result = await response.json().catch(() => ({}));
+    throw new Error(result.error || text("无法打开 HEIC 预览。", "Could not open the HEIC preview."));
   }
 
   async function photoPayload(file) {
@@ -899,8 +1004,14 @@
     let output = file;
     let filename = file.name;
     let bitmap;
+    const isHeif = /\.(heic|heif)$/i.test(filename) || /^image\/hei[cf](?:-sequence)?$/i.test(file.type);
     try {
-      bitmap = await createImageBitmap(file);
+      try {
+        bitmap = await createImageBitmap(file);
+      } catch (error) {
+        if (!isHeif) throw error;
+        bitmap = await createImageBitmap(await wicPreview(file));
+      }
       const factor = Math.min(1, 2400 / Math.max(bitmap.width, bitmap.height));
       const canvas = document.createElement("canvas");
       canvas.width = Math.max(1, Math.floor(bitmap.width * factor));
@@ -916,7 +1027,7 @@
       if (!output) throw new Error("JPEG");
       filename = file.name.replace(/\.[^.]+$/, "") + ".jpg";
     } catch {
-      if (!/\.(heic|heif)$/i.test(file.name)) {
+      if (!isHeif) {
         throw new Error(text("无法读取此照片，请检查 JPEG、PNG 或 HEIC 文件。", "Could not read this photo. Check the JPEG, PNG or HEIC file."));
       }
       output = file;
@@ -924,13 +1035,7 @@
     } finally {
       bitmap?.close();
     }
-    const contentBase64 = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result).split(",")[1]);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(output);
-    });
-    return { filename, contentBase64 };
+    return { filename, contentBase64: await photoBase64(output) };
   }
 
   function chips(group, rows, remove) {
@@ -1026,10 +1131,9 @@
       $("#fp-editor-saved-photos", form).innerHTML = [...savedPhotos].map(photoTile).join("");
       bindPhotos(form);
       for (const button of $$('button[data-fp-action="open-photo"]', form)) button.onclick = () => {
-        photoEntry(button.dataset.fpValue).then(({ blob }) => {
-          const filename = data().attachments.find(item => item.id === button.dataset.fpValue)?.filename || "footprint-photo";
-          downloadBlob(blob, filename);
-        }).catch(showError);
+        const id = button.dataset.fpValue;
+        const filename = data().attachments.find(item => item.id === id)?.filename || "footprint-photo";
+        window.Gao.download(`/api/footprints/photo?id=${encodeURIComponent(id)}`, filename);
       };
     };
     const dateFields = () => {
@@ -1360,6 +1464,7 @@
       bindMap();
     } else if (section === "train") {
       bindTrain();
+      window.TrainWorld?.mount();
     }
   }
 

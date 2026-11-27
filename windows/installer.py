@@ -12,6 +12,7 @@ import msilib
 from msilib import schema, sequence
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent / "src"))
+from gaojiezou.notifications import APP_USER_MODEL_ID, APP_ID_REGISTRY, TOAST_PROTOCOL_ACTIVATOR
 from gaojiezou.version import MARKETING_VERSION, WINDOWS_BUILD
 
 
@@ -94,6 +95,19 @@ def make_installer(output: pathlib.Path, payload: pathlib.Path, icon: pathlib.Pa
         ("ProtocolFlag", 1, r"Software\Classes\gaojiezou", "URL Protocol", "", "RhythmShell"),
         ("ProtocolIcon", 1, r"Software\Classes\gaojiezou\DefaultIcon", None, '"[#GuiFile]",0', "RhythmShell"),
         ("ProtocolOpen", 1, r"Software\Classes\gaojiezou\shell\open\command", None, '"[#GuiFile]" "%1"', "RhythmShell"),
+        ("ToastDisplayName", 1, APP_ID_REGISTRY, "DisplayName", "GaoJieZou Rhythm", "RhythmShell"),
+        ("ToastExecutable", 1, APP_ID_REGISTRY, "RhythmExecutable", "[#GuiFile]", "RhythmShell"),
+        ("ToastIcon", 1, APP_ID_REGISTRY, "IconUri", "[#GuiFile]", "RhythmShell"),
+        ("ToastActivator", 1, APP_ID_REGISTRY, "CustomActivator", TOAST_PROTOCOL_ACTIVATOR, "RhythmShell"),
+    ])
+    shortcut_table = db.OpenView("CREATE TABLE `MsiShortcutProperty` (`MsiShortcutProperty` CHAR(72) NOT NULL, "
+                                 "`Shortcut_` CHAR(72) NOT NULL, `PropertyKey` CHAR(0) NOT NULL, "
+                                 "`PropVariantValue` CHAR(0) NOT NULL PRIMARY KEY `MsiShortcutProperty`)")
+    shortcut_table.Execute(None)
+    shortcut_table.Close()
+    msilib.add_data(db, "MsiShortcutProperty", [
+        ("RhythmAumid", "OpenRhythm", "System.AppUserModel.ID", APP_USER_MODEL_ID),
+        ("RhythmToastActivator", "OpenRhythm", "System.AppUserModel.ToastActivatorCLSID", TOAST_PROTOCOL_ACTIVATOR),
     ])
     msilib.add_data(db, "Shortcut", [
         ("OpenRhythm", "RhythmMenu", "RHYTHM~1|GaoJieZou", "RhythmShell", "[#GuiFile]", None,

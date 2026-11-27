@@ -40,10 +40,13 @@ try {
     New-Item -Path $frozen, $macAssets, $DistDirectory -ItemType Directory -Force | Out-Null
 
     $resources = Join-Path $repo "Resources"
-    $renderedScenes = @("FarmGameSceneV15.png", "PastureGameSceneV15.png", "FishingGameSceneV15.png", "AquariumGameSceneV15.png")
+    $renderedScenes = @("FarmGameSceneV15.png", "PastureGameSceneV15.png", "FishingGameSceneV15.png", "AquariumGameSceneV15.png", "AquariumPanoramaV352.png")
     $atlases = @("CropAtlasV15.png", "CropYoungAtlasV15.png", "AnimalAtlasV23.png", "AnimalYoungAtlasV23.png")
     foreach ($name in (@("GaoJieZouIcon.png") + $renderedScenes + $atlases)) {
         Copy-Item -LiteralPath (Join-Path $resources $name) -Destination $macAssets -Force
+    }
+    foreach ($name in @("EstateMeadowV352.png", "WorldMaterialsV357.png", "FoliageV357.png")) {
+        Copy-Item -LiteralPath (Join-Path $repo "GameWorld\Resources\$name") -Destination $macAssets -Force
     }
     Get-ChildItem -LiteralPath $resources -Filter "Fish-*-V15.png" | Copy-Item -Destination $macAssets -Force
     Copy-Item -LiteralPath (Join-Path $resources "en.lproj\Localizable.strings") -Destination $macAssets -Force
@@ -117,7 +120,9 @@ VSVersionInfo(
         $mode = if ($flavor -eq "gui") { "--windowed" } else { "--console" }
         $flavorStage = Join-Path $stage $flavor
         Invoke-Python -m PyInstaller --noconfirm --clean --name $name $mode --onefile --paths src --add-data $platformFiles `
-            --add-data $artFiles --collect-data tzdata --icon $icon --version-file $versionFile `
+            --add-data $artFiles --collect-data tzdata --collect-submodules winrt --copy-metadata winrt-runtime `
+            --copy-metadata winrt-Windows.Data.Xml.Dom --copy-metadata winrt-Windows.Foundation.Collections `
+            --copy-metadata winrt-Windows.UI.Notifications --icon $icon --version-file $versionFile `
             --distpath $frozen --workpath $flavorStage --specpath $flavorStage launch.py
     }
 

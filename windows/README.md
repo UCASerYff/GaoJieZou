@@ -1,6 +1,6 @@
 # 搞节奏 Windows 4.12
 
-适用于 Windows 10 和 Windows 11 x64。应用显示版本为 **4.12+2**，Windows Installer 产品版本为 **4.12.2**。通过开始菜单启动后，默认使用独立的 Edge 应用窗口。Edge 不可用时使用系统默认浏览器。应用服务只监听本机环回地址，业务接口使用每次启动生成的会话令牌。
+适用于 Windows 10 和 Windows 11 x64。应用显示版本为 **4.12+3**，Windows Installer 产品版本为 **4.12.3**。通过开始菜单启动后，默认使用独立的 Edge 应用窗口。Edge 不可用时使用系统默认浏览器。应用服务只监听本机环回地址，业务接口使用每次启动生成的会话令牌。
 
 ## 安装和运行
 
@@ -34,9 +34,11 @@
 
 共同睡眠遵循单一 SQLite 权威、一次性历史迁移、近似去重和删除墓碑。健康与节奏从各自界面写入同一个存档。牧场和小岛分别按本地结算凭据防止重复发奖。Windows 支持本机刷新，macOS App Group 和 Darwin 通知属于各自宿主。
 
-地图使用离线城市坐标、Natural Earth 世界轮廓和公开的中国省级轮廓。中国地图按选定范围和地理投影绘制，地级到访点以坐标展示。资源与许可见 [Windows 第三方说明](src/gaojiezou/assets/THIRD_PARTY_NOTICES.txt)。照片保存、预览和导出在本机完成。已写入的 HEIC 原件仍可导出，预览取决于本机图像解码支持。
+地图使用离线城市坐标、Natural Earth 世界轮廓和 CTAmap 中国行政轮廓。省级和 370 个收藏城市按原有编号匹配，支持边界点选及高分辨率离线地图 PNG 导出。资源与许可见 [Windows 第三方说明](src/gaojiezou/assets/THIRD_PARTY_NOTICES.txt)。HEIC 原件可下载，本机具备相应的 Windows Imaging Component 解码器时可在应用内预览。
 
-Windows 游戏场景使用仓库中原有的二维场景图及图集。SceneKit 的三维相机、光照、运动效果和物理交互仍有差异。浏览器与 Tk 使用 Windows 字体、控件和图形实现，因此与 SwiftUI、Swift Charts 和 WidgetKit 存在渲染差异。小组件使用独立可置顶的 Windows 桌面窗口。打卡提醒通过后台托盘进程发送，实际显示受 Windows 通知设置影响。
+农场、牧场、渔场、水族馆、荒岛和旅行列车使用 WebGL 场景与仓库原有画材。场景支持点选、相机操作、牧场排序、荒岛建筑摆放、鱼类巡游和列车车厢内部视图。WebGL 不可用时使用对应的二维图和业务控件。光照、透明排序和选中边界仍与 SceneKit 有差异。
+
+小组件使用独立可置顶的 Windows 桌面窗口。打卡提醒由后台托盘进程通过 Windows 通知中心发送，支持打开日常打卡。WinRT 通知服务不可用时使用 Windows 托盘兼容提醒。横幅和通知中心的实际显示受系统通知设置影响。
 
 ## 构建与隔离验收
 
@@ -50,6 +52,12 @@ cd windows
 
 构建脚本先运行测试，再生成 `dist/GaoJieZou-4.12-Windows-x64.msi` 和对应的 `.msi.sha256`。隔离冒烟使用合成资料，核对安装入口、前版资料重开、已安装程序的 HTTP 读写与系统卸载保留资料。GitHub Actions 执行相同构建和冒烟并保留产物。
 
+可用 Node.js 和 Edge 运行浏览器回归。脚本使用独立的 Edge 配置和合成资料。
+
+~~~powershell
+node .\tests\world_browser_smoke.mjs C:\path\to\venv\Scripts\python.exe
+~~~
+
 开发或独立运行测试时可显式指定隔离目录。
 
 ~~~powershell
@@ -58,4 +66,4 @@ python -m pytest -q
 python .\launch.py --serve --no-browser --port 8765 --data-dir .\build\isolated-rhythm
 ~~~
 
-`GaoJieZou-cli.exe --inspect` 打印计数及资料状态。`--version` 打印 `4.12+2`。`--widget-snapshot` 兼容旧 Windows 的计数文件用法。`--widgets` 打开桌面小组件。`--create-empty` 明确在空目录创建资料。`--serve` 配合 `--no-browser` 可在独立目录冒烟，`--port 0` 由系统分配端口。
+`GaoJieZou-cli.exe --inspect` 打印计数及资料状态。`--version` 打印 `4.12+3`。`--widget-snapshot` 兼容旧 Windows 的计数文件用法。`--widgets` 打开桌面小组件。`--create-empty` 明确在空目录创建资料。`--serve` 配合 `--no-browser` 可在独立目录冒烟，`--port 0` 由系统分配端口。

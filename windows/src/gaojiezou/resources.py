@@ -19,7 +19,8 @@ def asset_dir() -> Path:
 def artwork(name: str) -> Path | None:
     if not re.fullmatch(
         r"(?:GaoJieZouIcon|(?:Farm|Pasture|Fishing|Aquarium)GameSceneV15|"
-        r"Crop(?:Young)?AtlasV15|Animal(?:Young)?AtlasV23|Fish-[a-z]+-V15|IslandSceneArt)\.png",
+        r"Crop(?:Young)?AtlasV15|Animal(?:Young)?AtlasV23|Fish-[a-z]+-V15|IslandSceneArt|"
+        r"EstateMeadowV352|WorldMaterialsV357|FoliageV357|AquariumPanoramaV352)\.png",
         name,
     ):
         return None
@@ -29,6 +30,8 @@ def artwork(name: str) -> Path | None:
     root = Path(__file__).resolve().parents[3]
     if name == "IslandSceneArt.png":
         return root / "Integrated" / "Health" / "Resources" / name
+    if name in {"EstateMeadowV352.png", "WorldMaterialsV357.png", "FoliageV357.png"}:
+        return root / "GameWorld" / "Resources" / name
     return root / "Resources" / name
 
 

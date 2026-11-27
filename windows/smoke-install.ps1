@@ -22,8 +22,10 @@ if ($prior -gt 0) { throw "This MSI product is already registered. The smoke tes
 
 $programMenu = Join-Path ([Environment]::GetFolderPath("Programs")) "GaoJieZou"
 $protocol = "Registry::HKEY_CURRENT_USER\Software\Classes\gaojiezou"
-if ($CheckShell -and ((Test-Path -LiteralPath $programMenu) -or (Test-Path -LiteralPath $protocol))) {
-    throw "The existing Start menu or URI registration prevents an isolated shell verification."
+$appModelID = "GaoSeries.GaoJieZou.Rhythm"
+$appIdentity = "Registry::HKEY_CURRENT_USER\Software\Classes\AppUserModelId\$appModelID"
+if ($CheckShell -and ((Test-Path -LiteralPath $programMenu) -or (Test-Path -LiteralPath $protocol) -or (Test-Path -LiteralPath $appIdentity))) {
+    throw "Existing Rhythm shell registration prevents an isolated verification."
 }
 
 $temp = [System.IO.Path]::GetTempPath()
@@ -69,6 +71,15 @@ try {
         $shell = New-Object -ComObject WScript.Shell
         $widgetLink = $shell.CreateShortcut((Join-Path $programMenu "Rhythm Desktop Widgets.lnk"))
         if ($widgetLink.TargetPath -ne $gui -or $widgetLink.Arguments -ne "--widgets") { throw "Widget shortcut is incorrect." }
+        $identity = Get-Item -LiteralPath $appIdentity
+        $registeredActivator = $identity.GetValue("CustomActivator")
+        if ($identity.GetValue("RhythmExecutable") -ne $gui -or -not $registeredActivator) { throw "Toast identity registration is incomplete." }
+        $explorer = New-Object -ComObject Shell.Application
+        $rhythmLink = $explorer.NameSpace($programMenu).ParseName("GaoJieZou.lnk")
+        if ($rhythmLink.ExtendedProperty("System.AppUserModel.ID") -ne $appModelID -or
+            $rhythmLink.ExtendedProperty("System.AppUserModel.ToastActivatorCLSID") -ne $registeredActivator) {
+            throw "Start menu notification shortcuts are missing their sender or activation identity."
+        }
     }
 
     $socket = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -115,15 +126,19 @@ try {
         else { Invoke-ApiPost "/api/library/create" | Out-Null }
         Invoke-ApiPost "/api/habits/save" '{"title":"MSI smoke habit","rewardCoins":4}' | Out-Null
         if ((Read-State).library.habits.title -notcontains "MSI smoke habit") { throw "Installed GUI did not read the saved habit." }
-        $art = $http.GetByteArrayAsync("$url/art/GaoJieZouIcon.png").GetAwaiter().GetResult()
-        if ($art.Count -lt 1000) { throw "The release application icon was not bundled." }
+        $assets = @("/art/GaoJieZouIcon.png", "/art/EstateMeadowV352.png", "/art/AquariumPanoramaV352.png",
+                    "/art/WorldMaterialsV357.png", "/art/FoliageV357.png", "/footprints-prefectures.json", "/gao-world.js")
+        foreach ($asset in $assets) {
+            $content = $http.GetByteArrayAsync("$url$asset").GetAwaiter().GetResult()
+            if ($content.Count -lt 1000) { throw "Missing or incomplete bundled asset: $asset" }
+        }
         Invoke-ApiPost "/api/shutdown" | Out-Null
         if (-not $proc.WaitForExit(20000) -or $proc.ExitCode -ne 0) { throw "Installed GUI failed to shut down cleanly." }
     }
     finally { $http.Dispose() }
     $reopened = & $cli --data-dir $data --inspect
     if ($LASTEXITCODE -ne 0 -or $reopened -notcontains "status=ready") { throw "The installed CLI could not reopen the data after shutdown." }
-    Write-Output "Installed $version, loaded bundled artwork, wrote and read isolated Windows data, and stopped cleanly."
+    Write-Output "Installed $version, loaded the bundled scene and map assets, wrote and read isolated Windows data, and stopped cleanly."
 }
 finally {
     if ($proc -and -not $proc.HasExited) { & taskkill.exe /PID $proc.Id /T /F | Out-Null }
@@ -131,7 +146,8 @@ finally {
         $remove = Start-Process msiexec.exe -PassThru -Wait -WindowStyle Hidden -ArgumentList @("/x", $product, "/qn", "/norestart")
         if ($remove.ExitCode -ne 0) { throw "MSI uninstall failed with exit code $($remove.ExitCode)." }
         if (Test-Path -LiteralPath (Join-Path $install "GaoJieZou.exe")) { throw "Installed application remained after uninstall." }
-        if ($CheckShell -and ((Test-Path -LiteralPath $programMenu) -or (Test-Path -LiteralPath $protocol))) { throw "Shell registration remained after uninstall." }
+        if ($CheckShell -and ((Test-Path -LiteralPath $programMenu) -or (Test-Path -LiteralPath $protocol) -or
+                            (Test-Path -LiteralPath $appIdentity))) { throw "Shell registration remained after uninstall." }
         if (-not (Test-Path -LiteralPath (Join-Path $data "library.json"))) { throw "Uninstall removed the user data fixture." }
         Write-Output "Uninstall removed program files and preserved the data fixture."
     }

@@ -6,11 +6,13 @@ from ctypes import wintypes
 from datetime import date, datetime, timedelta, timezone
 from threading import Event, Lock
 from types import SimpleNamespace
+from xml.etree import ElementTree
 
 import pytest
 
 from gaojiezou.desktop import DISPLAY_GUID, BackgroundRhythm, DesktopInstance, MSG_POWER, MSG_SESSION, WindowsDesktop, route_index
 from gaojiezou.footprints import search_cities
+from gaojiezou.notifications import ToastResult, habit_toast_xml
 from gaojiezou.store import RhythmStore
 from gaojiezou.widgets import footprint_widget_data, health_widget_data, log_widget_health, month_segments, project_widget_map, widget_data
 
@@ -68,6 +70,46 @@ def test_reminder_uses_current_habits_time_and_restart_marker(tmp_path):
     events.tick()
     BackgroundRhythm(server, notify).tick()
     assert notices == [("Rhythm", "You have 1 check-ins left today.")]
+
+
+def test_reminder_recovers_from_suspend_across_due_minute_on_same_day(tmp_path):
+    server, clock = new_server(tmp_path)
+    server.store.save_habit({"title": "Read"})
+    server.store.update_settings({"habitReminderHour": 21, "habitReminderMinute": 26, "habitReminderEnabled": True})
+    notices = []
+
+    def notify(*text):
+        notices.append(text)
+        return True
+
+    events = BackgroundRhythm(server, notify)
+    events.tick()
+    clock.now += timedelta(minutes=25)
+    events.tick()
+    assert notices == [("搞节奏", "今天还有 1 项打卡未完成")]
+
+
+def test_toast_payload_and_tray_fallback_preserve_windows_notification_preference(monkeypatch, tmp_path):
+    document = ElementTree.fromstring(habit_toast_xml("搞节奏", "A & B < 3"))
+    assert document.attrib == {"activationType": "protocol", "launch": "gaojiezou://habits"}
+    assert [text.text for text in document.findall("./visual/binding/text")] == ["搞节奏", "A & B < 3"]
+
+    desktop = WindowsDesktop(SimpleNamespace(store=SimpleNamespace(directory=tmp_path)), "test")
+    desktop.toast_identity, desktop.tray_added = True, True
+    deliveries = []
+
+    def send_to_tray(message, icon):
+        deliveries.append((message, icon._obj.info))
+        return True
+
+    desktop.notify_icon = send_to_tray
+    monkeypatch.setattr("gaojiezou.desktop.submit_habit_toast", lambda *_: ToastResult.DISABLED)
+    assert desktop._notify("Rhythm", "Due")
+    assert deliveries == []
+
+    monkeypatch.setattr("gaojiezou.desktop.submit_habit_toast", lambda *_: ToastResult.UNAVAILABLE)
+    assert desktop._notify("Rhythm", "Due")
+    assert deliveries == [(1, "Due")]
 
 
 def test_widgets_use_live_focus_last_night_goals_and_month_lanes(tmp_path):
