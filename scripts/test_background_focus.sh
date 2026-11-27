@@ -17,6 +17,7 @@ swiftc -swift-version 5 -parse-as-library -D SMOKE_TEST \
     -module-cache-path "$TEST_BUILD/cache" \
     -framework AppKit -framework SwiftUI -framework Combine -framework WidgetKit \
     -framework UserNotifications -lsqlite3 \
+    "$ROOT/Integration/Shared/IntegrationAuthority.swift" \
     $FILES "$ROOT/Tests/BackgroundFocusRegression.swift" \
     -o "$TEST_BUILD/background-focus-regression"
 "$TEST_BUILD/background-focus-regression"

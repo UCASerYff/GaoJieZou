@@ -15,5 +15,6 @@ xcrun swiftc -swift-version 5 -parse-as-library -D SMOKE_TEST \
     -sdk "$SDK" -target arm64-apple-macosx14.0 -module-cache-path "$TEST_BUILD/cache" \
     -framework AppKit -framework SwiftUI -framework Combine -framework WidgetKit \
     -framework UserNotifications -lsqlite3 \
+    "$ROOT/Integration/Shared/IntegrationAuthority.swift" \
     "${FILES[@]}" "$ROOT/Tests/WeeklyReviewRegression.swift" -o "$TEST_BUILD/weekly-review-regression"
 "$TEST_BUILD/weekly-review-regression"
