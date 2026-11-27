@@ -114,7 +114,9 @@
     const night = nightSleep(today());
     const crops = lib().farmPlots.filter(row => row.cropID);
     const mature = crops.filter(row => row.growthMinutes >= (G.state.catalog.crops.find(crop => crop.id === row.cropID)?.minutes ?? Infinity));
-    const intro = header(t("今日工作台","Today"),date(clock(),{year:"numeric",month:"long",day:"numeric",weekday:"long"}));
+    const intro = header(t("今日工作台","Today"),date(clock(),{year:"numeric",month:"long",day:"numeric",weekday:"long"}),
+      '<button type="button" class="secondary review-entry" data-go="today/review">'+icon("chart")+
+      '<span>'+L("每周复盘","Weekly review")+'</span>'+icon("right")+'</button>');
     const stats = '<div class="card stat-band" aria-label="'+L("今日数据","Today's metrics")+'">' +
       metric(t("今日专注"),duration(focusSeconds(today())),"timer","rhythm/focus") +
       metric(t("昨夜睡眠"),night ? duration(night.durationSeconds) : "—","moon","rhythm/sleep","purple") +

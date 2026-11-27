@@ -218,7 +218,8 @@
   function focusedControl() {
     const control = document.activeElement;
     if (!control || control === document.body || editor.contains(control)) return null;
-    for (const name of ["id","data-go","data-action","data-health-action","data-fp-action","name"]) {
+    for (const name of ["id","data-go","data-action","data-health-action","data-fp-action",
+      "data-review-week","data-review-day","data-review-days","data-review-retry","name"]) {
       const value = control.getAttribute(name);
       if (!value) continue;
       const detail = control.getAttribute("data-value") || control.getAttribute("data-fp-value");
@@ -279,6 +280,7 @@
     section = nextSection || ({today:"today",playground:"index"}[page] || sections[page][3][0][0]);
     window.EstateUI?.leave?.(oldPage, oldSection, page, section);
     window.HealthUI?.leave?.(oldPage, oldSection, page, section);
+    if (oldSection === "review" && section !== "review") window.ReviewUI?.leave();
     render();
     if (oldPage !== page || oldSection !== section) window.scrollTo(0, 0);
   }
@@ -327,7 +329,7 @@
     const workspace = sections[page];
     document.querySelector("#workspace-context").innerHTML = '<span class="context-icon">'+icon(workspace[1])+'</span><strong>' +
       localized(workspace[0]) + '</strong>' +
-      (active && page !== "today" && !(page==="rhythm" && section===currentTimer) ?
+      (active && (page !== "today" || section === "review") && !(page==="rhythm" && section===currentTimer) ?
         '<button type="button" class="context-timer" data-go="rhythm/'+currentTimer+'" aria-label="'+esc(timerTitle)+'">' +
         icon(currentTimer==="focus"?"timer":"moon")+'<span data-timer="'+currentTimer+'"></span></button>' : "");
     const quick = button(t("工作专注","Focus"),{go:"rhythm/focus",icon:"play"}) +
@@ -370,7 +372,8 @@
           button(t("重试","Retry"),{action:"retry-load",icon:"clock",className:"secondary"}),!fresh);
     } else {
       let module = window.RhythmUI;
-      if (page === "footprints" || section === "train") module = window.FootprintsUI;
+      if (page === "today" && section === "review") module = window.ReviewUI;
+      else if (page === "footprints" || section === "train") module = window.FootprintsUI;
       else if (page === "health" || section === "island") module = window.HealthUI;
       else if (page === "playground") module = window.EstateUI;
       const integrated = module === window.HealthUI || module === window.FootprintsUI;

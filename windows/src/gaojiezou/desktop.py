@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes as C
 import hashlib
 import logging
+import math
 import os
 import sys
 import threading
@@ -32,6 +33,8 @@ DISPLAY_GUID = uuid.UUID("2b84c20e-ad23-4ddf-93db-05ffbd7efca5").bytes_le
 MSG_ENDSESSION, MSG_TIMER, MSG_POWER, MSG_SESSION = 0x16, 0x113, 0x218, 0x2B1
 MSG_TRAY, MSG_OPEN, MSG_STOP = 0x8001, 0x8002, 0x8003
 NIM_ADD, NIM_MODIFY, NIM_DELETE, NIM_SETVERSION = 0, 1, 2, 4
+TOOLTIP_FLAGS = 0x84  # NIF_TIP | NIF_SHOWTIP (standard tooltip with version 4).
+TOOLTIP_RETRY_SECONDS = 10
 
 
 def route_index(uri: str | None) -> int:
@@ -69,6 +72,53 @@ def habit_counts(store, now) -> tuple[int, int]:
     habits = [row for row in doc.get("habits", ()) if _scheduled(row, now, store.tz)]
     keys = set(doc.get("habitCompletionKeys", ()))
     return len(habits), sum(_habit_key(row["id"], now, store.tz) in keys for row in habits)
+
+
+def _tooltip_minute_count(minutes: int) -> str:
+    digits = str(minutes)
+    if len(digits) > 9:  # Keep an unusually large imported estimate within szTip.
+        return f"≈{digits[0]}.{digits[1:3]}e{len(digits) - 1}"
+    return digits
+
+
+def focus_tray_tooltip(store) -> str:
+    english = store.settings.get("language") == "en"
+    app = "Rhythm" if english else "搞节奏"
+    library = store.library or {}
+    focus = library.get("activeFocus")
+    if not focus:
+        return app
+
+    running = focus.get("segmentStartedAt") is not None
+    if running:
+        status = "Focus" if english else "专注"
+    elif focus.get("pausedForSystem"):
+        status = "Focus paused by Windows" if english else "系统暂停专注"
+    else:
+        status = "Focus paused" if english else "专注已暂停"
+
+    elapsed = store.focus_elapsed()
+    elapsed_minutes = int(max(0, elapsed) // 60) if math.isfinite(elapsed) else 0
+    linked = focus.get("linkedActionID")
+    action = next((item for item in library.get("shortActions", ()) if item.get("id") == linked), {}) if linked else {}
+    target = action.get("estimatedMinutes")
+    if type(target) is float and target.is_integer():
+        target = int(target)
+
+    if type(target) is not int or target <= 0:
+        minutes = _tooltip_minute_count(elapsed_minutes)
+        detail = f"{minutes} min elapsed (no countdown)" if english else f"已专注 {minutes} 分钟（无倒计时）"
+    elif elapsed_minutes < target:
+        # Integer-minute goals show one minute left until the final minute elapses.
+        minutes = _tooltip_minute_count(target - elapsed_minutes)
+        detail = f"{minutes} min left" if english else f"剩余 {minutes} 分钟"
+    else:
+        extra = elapsed_minutes - target
+        detail = "target reached" if english else "目标已达"
+        if extra:
+            minutes = _tooltip_minute_count(extra)
+            detail += f" (+{minutes} min)" if english else f"（额外 {minutes} 分钟）"
+    return f"{app} · {status}: {detail}" if english else f"{app} · {status} · {detail}"
 
 
 class BackgroundRhythm:
@@ -211,6 +261,8 @@ class WindowsDesktop:
         self.window = None
         self.widget = None
         self.tray_added = False
+        self._sent_tooltip = None
+        self._tooltip_retry_at = 0.0
         self.failure = None
         self.ready = threading.Event()
         self.thread = threading.Thread(target=self._run, name="gaojiezou-windows", daemon=True)
@@ -371,16 +423,37 @@ class WindowsDesktop:
 
     def _register_icon(self) -> bool:
         icon = self._notification()
-        icon.flags = 0x87  # Callback, icon, tooltip and default tooltip display.
+        icon.flags = 0x03 | TOOLTIP_FLAGS  # Callback, icon and standard tooltip.
         icon.callback = MSG_TRAY
         icon.icon = self.icon
-        icon.tip = "Rhythm" if self.server.store.settings.get("language") == "en" else "搞节奏"
+        with self.server.lock:
+            icon.tip = focus_tray_tooltip(self.server.store)
         if not self.notify_icon(NIM_ADD, C.byref(icon)) and (
                 not self.tray_added or not self.notify_icon(NIM_MODIFY, C.byref(icon))):
             return False
         icon.version = 4
         self.notify_icon(NIM_SETVERSION, C.byref(icon))
+        self._sent_tooltip = icon.tip
+        self._tooltip_retry_at = 0.0
         return True
+
+    def _refresh_tray_tooltip(self) -> None:
+        if not self.tray_added:
+            return
+        with self.server.lock:
+            if self.server.shutdown_requested.is_set() or getattr(self.server, "exiting", False):
+                return
+            tip = focus_tray_tooltip(self.server.store)
+        if tip == self._sent_tooltip or time.monotonic() < self._tooltip_retry_at:
+            return
+        icon = self._notification()
+        icon.flags = TOOLTIP_FLAGS
+        icon.tip = tip
+        if self.notify_icon(NIM_MODIFY, C.byref(icon)):
+            self._sent_tooltip = tip
+            self._tooltip_retry_at = 0.0
+        else:
+            self._tooltip_retry_at = time.monotonic() + TOOLTIP_RETRY_SECONDS
 
     def _notify(self, title: str, message: str) -> bool:
         if self.toast_identity:
@@ -402,6 +475,7 @@ class WindowsDesktop:
                     self.background.system_change("session", wparam in (2, 4))
                 elif wparam in (7, 8):  # WTS_SESSION_LOCK / UNLOCK.
                     self.background.system_change("lock", wparam == 7)
+                self._refresh_tray_tooltip()
             elif message == MSG_POWER:
                 if wparam in (4, 7, 18):  # Suspend and its two resume variants.
                     self.background.system_change("suspend", wparam == 4)
@@ -411,12 +485,15 @@ class WindowsDesktop:
                         data = payload.raw
                         if data[:16] == DISPLAY_GUID and int.from_bytes(data[16:20], "little") == 4:
                             self.background.system_change("display", not int.from_bytes(data[20:24], "little"))
+                self._refresh_tray_tooltip()
                 return 1
             elif message == MSG_TIMER:
                 self.background.tick()
+                self._refresh_tray_tooltip()
                 if self.browser and not self.browser.seen:
                     self.browser.window()
-            elif self.taskbar_restored and message == self.taskbar_restored and self.tray and not getattr(self.server, "exiting", False):
+            elif (self.taskbar_restored and message == self.taskbar_restored and self.tray
+                  and not self.server.shutdown_requested.is_set() and not getattr(self.server, "exiting", False)):
                 self.tray_added = self._register_icon()
             elif message == MSG_TRAY:
                 event = lparam & 0xFFFF

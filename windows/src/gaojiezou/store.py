@@ -31,6 +31,7 @@ AUTHORITY = {
 class RhythmStore:
     def __init__(self, directory: Path, tz=None, clock=None):
         self.directory = Path(directory)
+        self.review_timezone = tz  # None asks the local calendar for each historical offset.
         self.tz = tz or datetime.now().astimezone().tzinfo
         self.clock = clock or (lambda: datetime.now(self.tz))
         self.library: dict | None = None
@@ -482,7 +483,10 @@ class RhythmStore:
                 "status": status,
             })
             if status == "completed" and old != "completed":
+                goal["completedAt"] = cocoa(self.now())
                 self._claim_goal(goal)
+            elif status != "completed":
+                goal.pop("completedAt", None)
         else:
             goal = {
                 "id": _uuid(),
@@ -500,6 +504,7 @@ class RhythmStore:
             }
             self.library["longGoals"].append(goal)
             if status == "completed":
+                goal["completedAt"] = cocoa(self.now())
                 self._claim_goal(goal)
         self.save()
         return goal

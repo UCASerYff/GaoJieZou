@@ -16,6 +16,7 @@ from gaojiezou.errors import AppError
 from gaojiezou.footprints import search_cities
 from gaojiezou.heic import HEIF_MIME, heif_preview
 from gaojiezou.resources import artwork, asset_dir, english_strings
+from gaojiezou.review import weekly_review
 from gaojiezou.store import RhythmStore, focus_csv, habit_csv, sleep_csv
 from gaojiezou.timeutil import add_days, parse_instant
 from gaojiezou.version import VERSION_LABEL
@@ -100,6 +101,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "搞节奏正在退出。"}, 503)
             else:
                 self._bytes(snapshot, JSON_CONTENT_TYPE)
+            return
+        if parsed.path == "/api/review/week":
+            if not self._authorized():
+                return
+            requested = parse_qs(parsed.query, keep_blank_values=True).get("date", [])
+            try:
+                if len(requested) > 1:
+                    raise AppError("复盘每次只接受一个本地日期。", "invalid")
+                with self.server.lock:
+                    report = None if self.server.exiting else weekly_review(self.server.store, next(iter(requested), None))
+                if report is None:
+                    self._json({"error": "搞节奏正在退出。"}, 503)
+                else:
+                    self._json(report)
+            except AppError as exc:
+                self._json({"error": exc.message, "code": exc.code}, 400 if exc.code == "invalid" else 409)
             return
         if parsed.path == "/api/cities":
             if not self._authorized():

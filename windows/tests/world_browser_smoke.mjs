@@ -105,16 +105,31 @@ try {
   channel.onmessage=({data})=>{
     const reply=JSON.parse(data);
     if(reply.id){
-      const pending=inflight.get(reply.id);inflight.delete(reply.id);
+      const pending=inflight.get(reply.id);
+      if(!pending) return;
+      clearTimeout(pending.deadline);
+      inflight.delete(reply.id);
       if(reply.error) pending.reject(Error(reply.error.message)); else pending.resolve(reply.result);
     } else if(reply.method==="Runtime.exceptionThrown") {
       errors.push(reply.params.exceptionDetails.exception?.description || reply.params.exceptionDetails.text);
     }
   };
+  channel.onclose=()=>{
+    for(const pending of inflight.values()){
+      clearTimeout(pending.deadline);
+      pending.reject(Error("Edge closed the DevTools session."));
+    }
+    inflight.clear();
+  };
   function cdp(method,params={}){
     return new Promise((resolve,reject)=>{
-      inflight.set(++next,{resolve,reject});
-      channel.send(JSON.stringify({id:next,method,params}));
+      const id=++next;
+      const deadline=setTimeout(()=>{
+        inflight.delete(id);
+        reject(Error("Edge did not answer "+method+" within 45 seconds."));
+      },45000);
+      inflight.set(id,{resolve,reject,deadline});
+      channel.send(JSON.stringify({id,method,params}));
     });
   }
   async function js(expression){
@@ -151,7 +166,7 @@ try {
   await cdp("Page.navigate",{url:base+"/"});
   await until("window.Gao?.state?.status==='ready'");
 
-  assert.equal(await js("Gao.state.version"),"4.12+4");
+  assert.equal(await js("Gao.state.version"),"4.12+5");
   assert.equal(await js("document.querySelector('.navigation-rail [aria-current=page]').dataset.go"),"today");
   await screenshot("core-today-light");
   await click('main [data-action="rhythm:focus-start"]');
@@ -173,6 +188,8 @@ try {
   await click('main [data-action="rhythm:sleep-entry"]');
   const setField=(selector,value)=>js("(()=>{const field=document.querySelector("+JSON.stringify(selector)+");field.value="+
     JSON.stringify(value)+";field.dispatchEvent(new Event('input',{bubbles:true}));})()");
+  const testNight=await js("(()=>{const now=new Date();now.setDate(now.getDate()-(now.getHours()<7?2:1));return Gao.localDay(now);})()");
+  await setField("#editor [name=night]",testNight);
   await setField("#editor [name=hours]","0");
   await setField("#editor [name=minutes]","10");
   await click("#editor [type=submit]");
@@ -208,9 +225,35 @@ try {
   await click('[data-go="rhythm/actions"]');
   await click('[data-action="rhythm:action-filter:open"]');
   assert(await js("document.querySelector('main').textContent.includes('安装回归合成行动')"));
+  const actionID=await js("Gao.state.library.shortActions.find(row=>row.title==='安装回归合成行动').id");
+  await click('[data-action="rhythm:action-toggle:'+actionID+'"]');
+  await until("Gao.state.library.shortActions.some(row=>row.title==='安装回归合成行动'&&row.isCompleted)");
+  await click('[data-go="rhythm/goals"]');
+  await click('[data-action="rhythm:goal-complete:'+goalID+'"]');
+  await until("Gao.state.library.longGoals.some(row=>row.title==='安装回归合成目标'&&row.completedAt!=null)");
   await click('[data-go="rhythm/statistics"]');
   await click('[data-action="rhythm:stats-period:sleep:30"]');
   assert(await js("Array.from(document.querySelectorAll('.chart')).some(chart=>chart.children.length===30)"));
+
+  const reviewEntry='[data-go="today/review"]';
+  await click('#workspaces [data-go="today"]');
+  await click(reviewEntry);
+  await until("document.querySelectorAll('[data-review-day]').length===7");
+  const firstOfWeek=await js("document.querySelector('[data-review-day]').dataset.reviewDay");
+  await screenshot("weekly-review-light");
+  const currentDay=await js("Gao.localDay(Gao.state.clock)");
+  await click('[data-review-day="'+currentDay+'"]');
+  await until("document.activeElement.id==='review-detail-title'");
+  const detail='[data-review-detail="'+currentDay+'"]';
+  assert(await js("document.querySelector("+JSON.stringify(detail)+").textContent.includes('安装回归合成行动')"));
+  assert(await js("document.querySelector("+JSON.stringify(detail)+").textContent.includes('安装回归合成目标')"));
+  await screenshot("weekly-review-day-light");
+  await click('[data-review-week="previous"]');
+  await until("document.querySelector('[data-review-day]')?.dataset.reviewDay!=="+JSON.stringify(firstOfWeek)+" && !!document.querySelector('#review-summary-title')");
+  assert(await js("document.querySelector('.review-summary').textContent.includes('历史计划')"));
+  await click('[data-review-week="next"]');
+  await until("document.querySelector('[data-review-day]')?.dataset.reviewDay==="+JSON.stringify(firstOfWeek));
+  await click("[data-review-back]");
 
   // Verify the toolbar emits the native request while the integration installer
   // separately verifies window creation on an isolated Windows desktop.
@@ -236,6 +279,11 @@ try {
   await nativeKey("ArrowRight",39);
   assert.equal(await js("document.activeElement.dataset.go"),"rhythm");
   assert(await js("document.activeElement.matches(':focus-visible')"),"Keyboard destination has no visible focus.");
+  await click(reviewEntry);
+  await until("document.querySelectorAll('[data-review-day]').length===7");
+  assert(await js("document.documentElement.scrollWidth <= innerWidth"),"Small weekly review overflows.");
+  await screenshot("weekly-review-dark-small");
+  await click("[data-review-back]");
   await cdp("Emulation.setDeviceMetricsOverride",{width:1280,height:840,deviceScaleFactor:1.5,mobile:false});
   await js("Gao.act('/api/settings',{appearance:'light'})");
   await go("index");
@@ -312,7 +360,7 @@ try {
   assert.equal(await js("!!document.querySelector('.gao-world-canvas')"),false,"3D fallback was not exercised.");
   assert.deepEqual(errors,[]);
   await js('Gao.api("/api/shutdown",{})');
-  console.log("Desktop workbench, focus, check-ins, sleep, chores, goals, linked actions, trends, preferences, widget routing, offline map export and six WebGL scenes passed.");
+  console.log("Desktop workbench, focus, check-ins, sleep, chores, goals, linked actions, trends, weekly review, preferences, widget routing, offline map export and six WebGL scenes passed.");
 } finally {
   await cleanup();
 }
