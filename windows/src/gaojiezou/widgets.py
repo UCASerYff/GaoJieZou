@@ -592,6 +592,8 @@ class Widgets:
     def _log(self, english, event_id=None):
         try:
             with self.server.lock:
+                if getattr(self.server, "exiting", False):
+                    return
                 log_widget_health(self.server.store, event_id)
             self.message = "Recorded" if english else "已记录"
         except (AppError, OSError) as exc:

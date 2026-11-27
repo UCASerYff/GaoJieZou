@@ -20,6 +20,12 @@ from gaojiezou.store import RhythmStore, focus_csv, habit_csv, sleep_csv
 from gaojiezou.timeutil import add_days, parse_instant
 from gaojiezou.version import VERSION_LABEL
 
+JSON_CONTENT_TYPE = "application/json; charset=utf-8"
+
+
+def _json_bytes(payload: dict) -> bytes:
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
 
 class RhythmServer(ThreadingHTTPServer):
     allow_reuse_address = False
@@ -29,13 +35,42 @@ class RhythmServer(ThreadingHTTPServer):
         self.token = secrets.token_urlsafe(24)
         self.lock = threading.Lock()
         self.shutdown_requested = threading.Event()
+        self.exiting = False
         self.desktop = None
+        self.window_updates = threading.Condition()
+        self.window_revision = 0
+        self.window_route = ""
         super().__init__((host, port), Handler)
 
     @property
     def url(self) -> str:
         host, port = self.server_address[:2]
         return f"http://{host}:{port}/"
+
+    def begin_exit(self) -> None:
+        with self.lock:
+            if self.exiting:
+                return
+            self.store.prepare_for_exit()
+            with self.window_updates:
+                self.exiting = True
+                self.window_updates.notify_all()
+
+    def request_exit(self) -> None:
+        self.begin_exit()
+        self.shutdown_requested.set()
+
+    def navigate_window(self, route: str) -> None:
+        with self.window_updates:
+            if not self.exiting:
+                self.window_route = route
+                self.window_revision += 1
+                self.window_updates.notify_all()
+
+    def window_update(self, revision: int) -> dict:
+        with self.window_updates:
+            self.window_updates.wait_for(lambda: self.exiting or self.window_revision != revision, timeout=20)
+            return {"revision": self.window_revision, "route": self.window_route, "exiting": self.exiting}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -46,11 +81,25 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/":
             self._page()
             return
+        if parsed.path == "/api/platform/window":
+            if not self._authorized():
+                return
+            try:
+                revision = int(parse_qs(parsed.query).get("after", ["0"])[0])
+            except ValueError:
+                self._json({"error": "无效的窗口状态。"}, 400)
+                return
+            self._json(self.server.window_update(revision))
+            return
         if parsed.path == "/api/state":
             if not self._authorized():
                 return
             with self.server.lock:
-                self._json(self.server.store.snapshot())
+                snapshot = None if self.server.exiting else _json_bytes(self.server.store.snapshot())
+            if snapshot is None:
+                self._json({"error": "搞节奏正在退出。"}, 503)
+            else:
+                self._bytes(snapshot, JSON_CONTENT_TYPE)
             return
         if parsed.path == "/api/cities":
             if not self._authorized():
@@ -165,14 +214,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/api/shutdown":
             try:
-                with self.server.lock:
-                    self.server.store.prepare_for_exit()
+                self.server.begin_exit()
             except (AppError, OSError) as exc:
                 self._json({"ok": False, "error": str(exc)}, 500)
                 return
-            self._json({"ok": True})
-            self.server.shutdown_requested.set()
-            threading.Thread(target=self.server.shutdown, daemon=True).start()
+            try:
+                self._json({"ok": True})
+            finally:
+                self.server.shutdown_requested.set()
             return
         if parsed.path == "/api/platform/widgets":
             if self.server.desktop is None:
@@ -184,8 +233,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             payload = self._body()
             with self.server.lock:
-                result = dispatch(self.server.store, parsed.path, payload)
-                self._json({"ok": True, "result": result, "state": self.server.store.snapshot()})
+                if self.server.exiting:
+                    response = None
+                else:
+                    result = dispatch(self.server.store, parsed.path, payload)
+                    response = _json_bytes({"ok": True, "result": result, "state": self.server.store.snapshot()})
+            if response is None:
+                self._json({"ok": False, "error": "搞节奏正在退出。"}, 503)
+            else:
+                self._bytes(response, JSON_CONTENT_TYPE)
         except AppError as exc:
             self._json({"ok": False, "error": exc.message, "code": exc.code}, 400)
         except (KeyError, ValueError, TypeError, OverflowError, binascii.Error):
@@ -227,19 +283,21 @@ class Handler(BaseHTTPRequestHandler):
         return data
 
     def _json(self, payload: dict, status: int = 200) -> None:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        self._bytes(body, "application/json; charset=utf-8", status)
+        self._bytes(_json_bytes(payload), JSON_CONTENT_TYPE, status)
 
     def _bytes(self, body: bytes, content_type: str, status: int = 200, cache_control: str = "no-store") -> None:
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", cache_control)
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Referrer-Policy", "no-referrer")
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", cache_control)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.end_headers()
+            self.wfile.write(body)
+        except ConnectionError:
+            pass  # A closed browser window can abandon a pending response.
 
     def log_message(self, fmt: str, *args) -> None:
         return

@@ -156,6 +156,11 @@ try {
   await screenshot("core-today-light");
   await click('main [data-action="rhythm:focus-start"]');
   await until("!!Gao.state.library.activeFocus");
+  await click("#toolbar .more-button");
+  await click('#toolbar [data-action="quit"]');
+  await until("document.querySelector('#editor').open");
+  await click("#editor .dialog-footer [data-action=close]");
+  await until("!document.querySelector('#editor').open && Gao.state.library.activeFocus.segmentStartedAt!=null");
   await click('main [data-action="rhythm:focus-pause"]');
   await until("Gao.state.library.activeFocus.segmentStartedAt==null");
   await click('main [data-action="rhythm:focus-resume"]');

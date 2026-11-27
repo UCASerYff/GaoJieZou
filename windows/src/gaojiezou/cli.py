@@ -37,7 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     instance = DesktopInstance(directory) if sys.platform == "win32" else None
     try:
         if instance and not instance.owner:
-            if not (args.inspect or args.widget_snapshot or args.create_empty or args.no_browser or args.port):
+            if not (args.inspect or args.widget_snapshot or args.create_empty or args.serve or args.no_browser or args.port):
                 if instance.forward(route, args.widgets):
                     return 0
             print("此资料库正在使用。", file=sys.stderr)
@@ -70,7 +70,9 @@ def _run(args, directory: Path, instance: DesktopInstance | None, route: int) ->
         print(exc.message, file=sys.stderr)
         return 2
     server = serve(store, port=args.port, open_browser=False)
-    desktop = WindowsDesktop(server, instance.name, tray=not args.no_browser) if instance else None
+    console_build = getattr(sys, "frozen", False) and Path(sys.executable).stem.lower().endswith("-cli")
+    tray = not (args.no_browser or args.serve or console_build)
+    desktop = WindowsDesktop(server, instance.name, tray=tray, allow_main=not args.no_browser) if instance else None
     try:
         if desktop:
             desktop.start()
@@ -78,23 +80,25 @@ def _run(args, directory: Path, instance: DesktopInstance | None, route: int) ->
         if args.widgets and desktop:
             desktop.show_widgets()
         elif not args.no_browser:
-            open_window(server.url, route)
+            if desktop:
+                desktop.show_main(route)
+            else:
+                open_window(server.url, route)
         server.shutdown_requested.wait()
     except KeyboardInterrupt:
-        pass
+        try:
+            server.request_exit()
+        except (AppError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
     except OSError as exc:
         print(str(exc), file=sys.stderr)
         return 2
     finally:
         server.shutdown()
-        if desktop:
-            desktop.close()
         try:
-            with server.lock:
-                store.prepare_for_exit()
-        except AppError as exc:
-            print(exc.message, file=sys.stderr)
-            return 2
+            if desktop:
+                desktop.close()
         finally:
             server.server_close()
     return 0

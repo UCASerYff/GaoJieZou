@@ -6,7 +6,6 @@ import ctypes as C
 import hashlib
 import logging
 import os
-import subprocess
 import sys
 import threading
 import time
@@ -16,16 +15,18 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 from gaojiezou import library
+from gaojiezou.appwindow import EdgeWindow, bind as _binding, find_edge
+from gaojiezou.errors import AppError
 from gaojiezou.notifications import ToastResult, set_process_identity, submit_habit_toast
 from gaojiezou.store import _habit_key, _scheduled
 
 LOG = logging.getLogger(__name__)
 ROUTES = (
-    "today", "focus", "sleep", "habits", "chores", "longGoals", "shortActions", "statistics",
+    "", "focus", "sleep", "habits", "chores", "longGoals", "shortActions", "statistics",
     "health", "health/records", "health/trends", "health/events", "health/island",
     "health/water", "health/sleep", "health/meal", "health/exercise", "health/weight",
     "footprints", "footprints/trips", "footprints/timeline", "footprints/resident-city", "footprints/train",
-    "farm", "pasture", "fishing",
+    "farm", "pasture", "fishing", "today",
 )
 DISPLAY_GUID = uuid.UUID("2b84c20e-ad23-4ddf-93db-05ffbd7efca5").bytes_le
 MSG_ENDSESSION, MSG_TIMER, MSG_POWER, MSG_SESSION = 0x16, 0x113, 0x218, 0x2B1
@@ -45,33 +46,22 @@ def route_index(uri: str | None) -> int:
         path = "/".join(segment for segment in (aliases[parsed.scheme], path) if segment)
     elif parsed.scheme != "gaojiezou":
         raise ValueError("不支持的搞节奏链接。")
-    path = {"health/game": "health/island", "footprints/game": "footprints/train",
+    path = {"health/overview": "health", "health/game": "health/island",
+            "footprints/map": "footprints", "footprints/game": "footprints/train",
             "footprints/residentcity": "footprints/resident-city", "footprints/home": "footprints/resident-city"}.get(path, path)
-    by_name = {name.lower(): i for i, name in enumerate(ROUTES)}
+    by_name = {name.lower(): i for i, name in enumerate(ROUTES) if name}
     try:
         return by_name[path]
     except KeyError as exc:
         raise ValueError("找不到该搞节奏页面。") from exc
 
 
-def open_window(url: str, route: int = 0) -> None:
-    target = url if route == 0 else f"{url}?route={quote('gaojiezou://' + ROUTES[route], safe='')}"
-    if sys.platform == "win32":
-        import winreg
-
-        key_name = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
-        for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
-            try:
-                with winreg.OpenKey(hive, key_name) as key:
-                    edge = Path(winreg.QueryValue(key, None))
-                if edge.is_file():
-                    subprocess.Popen([str(edge), f"--app={target}"], creationflags=subprocess.CREATE_NO_WINDOW)
-                    return
-            except OSError:
-                continue
+def open_window(url: str, route: int = 0) -> bool:
     import webbrowser
 
-    webbrowser.open(target)
+    separator = "&" if "?" in url else "?"
+    target = url if route == 0 else f"{url}{separator}route={quote('gaojiezou://' + ROUTES[route], safe='')}"
+    return webbrowser.open(target)
 
 
 def habit_counts(store, now) -> tuple[int, int]:
@@ -97,6 +87,8 @@ class BackgroundRhythm:
 
     def system_change(self, source: str, inactive: bool) -> None:
         with self.server.lock:
+            if self.server.shutdown_requested.is_set() or getattr(self.server, "exiting", False):
+                return
             was_inactive = bool(self.inactive)
             if inactive:
                 self.inactive.add(source)
@@ -119,6 +111,8 @@ class BackgroundRhythm:
 
     def tick(self) -> None:
         with self.server.lock:
+            if self.server.shutdown_requested.is_set() or getattr(self.server, "exiting", False):
+                return
             store = self.server.store
             if store.status != "ready" or store.library is None:
                 return
@@ -168,13 +162,6 @@ class NotifyIcon(C.Structure):
     ]
 
 
-def _binding(dll, name, result, *args):
-    function = getattr(dll, name)
-    function.restype = result
-    function.argtypes = args
-    return function
-
-
 def _instance_name(directory: Path) -> str:
     key = os.path.normcase(str(directory.resolve()))
     return "GaoJieZou.Rhythm." + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
@@ -198,9 +185,14 @@ class DesktopInstance:
         user = C.WinDLL("user32", use_last_error=True)
         find = _binding(user, "FindWindowW", W.HWND, W.LPCWSTR, W.LPCWSTR)
         post = _binding(user, "PostMessageW", W.BOOL, W.HWND, W.UINT, W.WPARAM, W.LPARAM)
+        window_pid = _binding(user, "GetWindowThreadProcessId", W.DWORD, W.HWND, C.POINTER(W.DWORD))
+        allow_focus = _binding(user, "AllowSetForegroundWindow", W.BOOL, W.DWORD)
         for _attempt in range(20):
             window = find(self.name, None)
             if window:
+                owner = W.DWORD()
+                if window_pid(window, C.byref(owner)):
+                    allow_focus(owner.value)
                 return bool(post(window, MSG_OPEN, route, int(widgets)))
             time.sleep(0.1)
         return False
@@ -210,12 +202,15 @@ class DesktopInstance:
 
 
 class WindowsDesktop:
-    def __init__(self, server, name: str, tray: bool = True):
+    def __init__(self, server, name: str, tray: bool = True, allow_main: bool = True):
         self.server = server
         self.name = name
         self.tray = tray
+        self.allow_main = allow_main
+        self.browser = None
         self.window = None
         self.widget = None
+        self.tray_added = False
         self.failure = None
         self.ready = threading.Event()
         self.thread = threading.Thread(target=self._run, name="gaojiezou-windows", daemon=True)
@@ -233,13 +228,41 @@ class WindowsDesktop:
             raise self.failure
 
     def show_widgets(self) -> None:
-        self.post(self.window, MSG_OPEN, 0, 1)
+        if self.window:
+            self.post(self.window, MSG_OPEN, 0, 1)
+
+    def show_main(self, route: int = 0) -> None:
+        if self.window:
+            self.post(self.window, MSG_OPEN, route, 0)
+
+    def _show_main(self, route: int = 0) -> None:
+        if not self.allow_main:
+            return
+        if self.browser is None:
+            if executable := find_edge():
+                self.browser = EdgeWindow(executable)
+        target = self.server.url + f"?desktop={self.server.window_revision}"
+        if self.browser is not None:
+            link = "gaojiezou://" + ROUTES[route] if route else ""
+            edge_target = target + "&route=" + quote(link, safe="") if link else target
+            try:
+                if self.browser.show(edge_target) and link:
+                    self.server.navigate_window(link)
+                return
+            except OSError:
+                self.browser.close()
+                self.browser = None
+                LOG.exception("Unable to launch the owned Edge window")
+        if not open_window(target, route):
+            english = self.server.store.settings.get("language") == "en"
+            text = "Couldn't open the Rhythm window." if english else "无法打开搞节奏窗口。"
+            self._message_box(text, "Rhythm" if english else "搞节奏", 0x10)
 
     def close(self) -> None:
         if self.window:
             self.post(self.window, MSG_STOP, 0, 0)
         if self.thread.is_alive():
-            self.thread.join(timeout=5)
+            self.thread.join(timeout=10)
 
     def _run(self) -> None:
         try:
@@ -247,6 +270,8 @@ class WindowsDesktop:
         except Exception as exc:
             self.failure = exc
             LOG.exception("Windows desktop integration failed")
+            if self.ready.is_set():
+                self._request_exit(system=True)
         finally:
             self.ready.set()
 
@@ -315,6 +340,8 @@ class WindowsDesktop:
                 kill_timer(window, timer_id)
             if self.tray_added:
                 self.notify_icon(NIM_DELETE, C.byref(self._notification()))
+            if self.browser:
+                self.browser.close()
             if self.icon and getattr(sys, "frozen", False):
                 _binding(user, "DestroyIcon", W.BOOL, W.HICON)(self.icon)
             if power:
@@ -347,8 +374,9 @@ class WindowsDesktop:
         icon.flags = 0x87  # Callback, icon, tooltip and default tooltip display.
         icon.callback = MSG_TRAY
         icon.icon = self.icon
-        icon.tip = "搞节奏"
-        if not self.notify_icon(NIM_ADD, C.byref(icon)):
+        icon.tip = "Rhythm" if self.server.store.settings.get("language") == "en" else "搞节奏"
+        if not self.notify_icon(NIM_ADD, C.byref(icon)) and (
+                not self.tray_added or not self.notify_icon(NIM_MODIFY, C.byref(icon))):
             return False
         icon.version = 4
         self.notify_icon(NIM_SETVERSION, C.byref(icon))
@@ -386,45 +414,50 @@ class WindowsDesktop:
                 return 1
             elif message == MSG_TIMER:
                 self.background.tick()
-            elif message == self.taskbar_restored and self.tray:
+                if self.browser and not self.browser.seen:
+                    self.browser.window()
+            elif self.taskbar_restored and message == self.taskbar_restored and self.tray and not getattr(self.server, "exiting", False):
                 self.tray_added = self._register_icon()
             elif message == MSG_TRAY:
                 event = lparam & 0xFFFF
-                if event in (0x400, 0x401):  # Selection and keyboard selection.
-                    open_window(self.server.url)
+                if getattr(self.server, "exiting", False):
+                    return 0
+                if event in (0x202, 0x400, 0x401):  # Mouse, selection and keyboard selection.
+                    self._show_main()
                 elif event == 0x405:  # Balloon clicked.
-                    open_window(self.server.url, route_index("gaojiezou://habits"))
-                elif event == 0x7B:
-                    self._menu()
+                    self._show_main(route_index("gaojiezou://habits"))
+                elif event in (0x205, 0x7B):  # Legacy mouse callback and v4 context menu.
+                    self._menu(wparam if event == 0x7B else None)
             elif message == MSG_OPEN:
+                if getattr(self.server, "exiting", False):
+                    return 0
                 if lparam == 1:
                     if self.widget is None:
                         from gaojiezou.widgets import WidgetHost
 
-                        self.widget = WidgetHost(self.server, open_window)
+                        self.widget = WidgetHost(self.server, lambda _url, route: self.show_main(route))
                     self.widget.show()
                 elif 0 <= wparam < len(ROUTES):
-                    open_window(self.server.url, wparam)
+                    self._show_main(wparam)
             elif message == MSG_ENDSESSION and wparam:
-                with self.server.lock:
-                    self.server.store.prepare_for_exit()
-                self.server.shutdown_requested.set()
-            elif message in (0x10, MSG_STOP):  # WM_CLOSE / private close request.
-                self.server.shutdown_requested.set()
+                self._request_exit(system=True)
+            elif message == 0x10:  # Close requested on the native host, not the separate app window.
+                self._request_exit()
+                return 0
+            elif message == MSG_STOP:
                 self.quit_loop(0)
                 return 0
         except Exception:
             LOG.exception("Windows desktop event failed")
         return self.def_window(window, message, wparam, lparam)
 
-    def _menu(self) -> None:
+    def _menu(self, position: int | None = None) -> None:
         user = self.user
         menu = _binding(user, "CreatePopupMenu", W.HMENU)()
         if not menu:
             return
         append = _binding(user, "AppendMenuW", W.BOOL, W.HMENU, W.UINT, C.c_size_t, W.LPCWSTR)
         destroy = _binding(user, "DestroyMenu", W.BOOL, W.HMENU)
-        get_cursor = _binding(user, "GetCursorPos", W.BOOL, C.POINTER(W.POINT))
         track = _binding(user, "TrackPopupMenu", W.BOOL, W.HMENU, W.UINT, C.c_int, C.c_int,
                          C.c_int, W.HWND, C.c_void_p)
         english = self.server.store.settings.get("language") == "en"
@@ -432,15 +465,40 @@ class WindowsDesktop:
         append(menu, 0, 2, "Desktop widgets" if english else "桌面小组件")
         append(menu, 0x800, 0, None)
         append(menu, 0, 3, "Quit" if english else "退出")
-        point = W.POINT()
-        get_cursor(C.byref(point))
+        if position is None:
+            point = W.POINT()
+            _binding(user, "GetCursorPos", W.BOOL, C.POINTER(W.POINT))(C.byref(point))
+        else:
+            point = W.POINT(C.c_short(position & 0xFFFF).value, C.c_short((position >> 16) & 0xFFFF).value)
         _binding(user, "SetForegroundWindow", W.BOOL, W.HWND)(self.window)
         command = track(menu, 0x182, point.x, point.y, 0, self.window, None)
         destroy(menu)
         self.post(self.window, 0, 0, 0)
+        self._tray_command(command)
+
+    def _tray_command(self, command: int) -> None:
         if command == 1:
-            open_window(self.server.url)
+            self._show_main()
         elif command == 2:
             self.show_widgets()
         elif command == 3:
-            self.post(self.window, MSG_STOP, 0, 0)
+            english = self.server.store.settings.get("language") == "en"
+            text = ("Rhythm will save records and pause any running focus session." if english else
+                    "应用将保存记录并暂停正在运行的专注。")
+            title = "Quit Rhythm?" if english else "退出搞节奏？"
+            if self._message_box(text, title, 0x121) == 1:  # OK/Cancel, question, default Cancel.
+                self._request_exit()
+
+    def _message_box(self, text: str, title: str, style: int) -> int:
+        message_box = _binding(self.user, "MessageBoxW", C.c_int, W.HWND, W.LPCWSTR, W.LPCWSTR, W.UINT)
+        return message_box(self.window, text, title, style)
+
+    def _request_exit(self, system: bool = False) -> None:
+        try:
+            self.server.request_exit()
+        except (AppError, OSError) as error:
+            LOG.exception("Unable to save Rhythm when quitting")
+            if system:
+                self.server.shutdown_requested.set()
+            else:
+                self._message_box(str(error), "搞节奏", 0x10)

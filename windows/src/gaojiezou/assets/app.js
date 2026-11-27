@@ -502,11 +502,7 @@
     if (action === "quit") modal(t("退出搞节奏？","Quit Rhythm?"),"<p>" +
       localized("应用将保存记录并暂停正在运行的专注。","Rhythm will save records and pause any running focus session.") + "</p>",async () => {
         await act("/api/shutdown",{},{throw:true,render:false});
-        document.querySelector(".chrome").hidden = true;
-        document.querySelector(".navigation-rail").hidden = true;
-        app.innerHTML = empty(t("搞节奏已退出。","Rhythm has quit."));
-        clearInterval(poll);
-        window.close();
+        finishExit();
       },{submitLabel:t("退出","Quit")});
     if (action === "reset-color") {
       background = "";
@@ -542,13 +538,40 @@
       app.querySelector("[data-focus-shortcut]")?.click();
     }
   });
+  let closing = false;
   const poll = setInterval(() => {
     if (!document.hidden) refresh({onlyChange:true}).catch(() => {});
   },5000);
-  setInterval(tick,125);
+  const timer = setInterval(tick,125);
   document.addEventListener("visibilitychange",() => {
-    if (!document.hidden) refresh({onlyChange:true}).catch(() => {});
+    if (!closing && !document.hidden) refresh({onlyChange:true}).catch(() => {});
   });
+  function finishExit() {
+    if (closing) return;
+    closing = true;
+    clearInterval(poll);
+    clearInterval(timer);
+    if (editor.open) editor.close();
+    document.querySelector(".chrome").hidden = true;
+    document.querySelector(".navigation-rail").hidden = true;
+    app.innerHTML = empty(t("搞节奏已退出。","Rhythm has quit."));
+    window.close();
+  }
+  async function watchDesktop(serial) {
+    while (!closing) {
+      try {
+        const update = await api("/api/platform/window?after="+serial);
+        if (update.exiting) {
+          finishExit();
+        } else if (update.revision !== serial) {
+          serial = update.revision;
+          route(update.route);
+        }
+      } catch {
+        if (!closing) await new Promise(resolve => setTimeout(resolve,1000));
+      }
+    }
+  }
   async function bootstrap() {
     try {
       translations = await fetch("/localization/en.json").then(response => response.json()).catch(() => ({}));
@@ -560,5 +583,9 @@
         button(t("重试","Retry"),{action:"retry-load",icon:"clock",className:"secondary"}),true);
     }
   }
-  document.addEventListener("DOMContentLoaded",bootstrap);
+  document.addEventListener("DOMContentLoaded",async () => {
+    await bootstrap();
+    const desktop = new URLSearchParams(location.search).get("desktop");
+    if (desktop !== null && /^\d+$/.test(desktop)) watchDesktop(Number(desktop));
+  });
 })();

@@ -14,6 +14,7 @@ from gaojiezou.desktop import DISPLAY_GUID, BackgroundRhythm, DesktopInstance, M
 from gaojiezou.footprints import search_cities
 from gaojiezou.notifications import ToastResult, habit_toast_xml
 from gaojiezou.store import RhythmStore
+from gaojiezou.web import RhythmServer
 from gaojiezou.widgets import footprint_widget_data, health_widget_data, log_widget_health, month_segments, project_widget_map, widget_data
 
 
@@ -133,6 +134,8 @@ def test_widgets_use_live_focus_last_night_goals_and_month_lanes(tmp_path):
     assert route_index("gaojiezou://longGoals") > 0
     assert route_index("gaozuji://train") == route_index("gaojiezou://footprints/train")
     assert route_index("gaojiankang://weight") == route_index("gaojiezou://health/weight")
+    assert route_index("gaojiezou://health/overview") == route_index("gaojiezou://health")
+    assert route_index("gaojiezou://footprints/map") == route_index("gaojiezou://footprints")
     with pytest.raises(ValueError):
         route_index("gaojiezou://longGoals?unexpected=1")
 
@@ -170,11 +173,11 @@ def test_native_message_registration_and_dispatch(tmp_path, monkeypatch):
     opened = []
     browser = Event()
 
-    def capture_route(url, route):
-        opened.append((url, route))
+    def capture_route(route):
+        opened.append(route)
         browser.set()
 
-    monkeypatch.setattr("gaojiezou.desktop.open_window", capture_route)
+    monkeypatch.setattr(desktop, "_show_main", capture_route)
     try:
         assert primary.owner and not duplicate.owner
         desktop.start()
@@ -182,7 +185,7 @@ def test_native_message_registration_and_dispatch(tmp_path, monkeypatch):
         assert desktop.session_registered and desktop.display_registered
         selected = route_index("gaojiezou://longGoals")
         assert duplicate.forward(selected) and browser.wait(3)
-        assert opened == [(server.url, selected)]
+        assert opened == [selected]
         send = ctypes.WinDLL("user32").SendMessageW
         send.restype = ctypes.c_ssize_t
         send.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
@@ -206,3 +209,69 @@ def test_native_message_registration_and_dispatch(tmp_path, monkeypatch):
         desktop.close()
         duplicate.close()
         primary.close()
+
+
+def test_shutdown_stays_open_on_save_error_and_persists_focus_once(tmp_path, monkeypatch):
+    source, clock = new_server(tmp_path)
+    store = source.store
+    server = RhythmServer(store)
+    store.start_focus()
+    clock.now += timedelta(minutes=15)
+    real_save = store.prepare_for_exit
+    calls = []
+
+    def fail():
+        calls.append("failure")
+        raise OSError("Synthetic exit write failure")
+
+    def save():
+        calls.append("save")
+        real_save()
+
+    try:
+        monkeypatch.setattr(store, "prepare_for_exit", fail)
+        with pytest.raises(OSError):
+            server.request_exit()
+        assert not server.exiting and not server.shutdown_requested.is_set()
+        assert store.library["activeFocus"]["segmentStartedAt"] is not None
+
+        monkeypatch.setattr(store, "prepare_for_exit", save)
+        server.begin_exit()  # HTTP accepts after saving and acknowledges before signaling.
+        assert server.exiting and not server.shutdown_requested.is_set()
+        server.request_exit()  # Native exit shares the same commit.
+        assert server.shutdown_requested.is_set()
+        assert calls == ["failure", "save"]
+        assert store.library["activeFocus"]["segmentStartedAt"] is None
+        assert store.focus_elapsed() == 15 * 60
+        reopened = RhythmStore(tmp_path, tz=timezone.utc, clock=lambda: clock.now)
+        assert reopened.focus_elapsed() == 15 * 60
+    finally:
+        server.server_close()
+
+
+def test_a_single_browser_receives_deep_links_only_when_the_window_is_reused(tmp_path):
+    source, _ = new_server(tmp_path)
+    server = RhythmServer(source.store)
+    desktop = WindowsDesktop(server, "test")
+    urls = []
+
+    def show(url):
+        urls.append(url)
+        return len(urls) > 1
+
+    desktop.browser = SimpleNamespace(show=show)
+    try:
+        desktop._show_main(route_index("gaojiezou://health"))
+        assert "?desktop=0&route=gaojiezou%3A%2F%2Fhealth" in urls[-1]
+        assert server.window_revision == 0
+        desktop._show_main()
+        assert urls[-1].endswith("?desktop=0")
+        assert server.window_revision == 0
+        desktop._show_main(route_index("gaojiezou://today"))
+        assert server.window_update(0) == {"revision": 1, "route": "gaojiezou://today", "exiting": False}
+        desktop._show_main(route_index("gaojiezou://footprints/train"))
+        assert server.window_update(1) == {"revision": 2, "route": "gaojiezou://footprints/train", "exiting": False}
+        server.request_exit()
+        assert server.window_update(2)["exiting"]
+    finally:
+        server.server_close()
