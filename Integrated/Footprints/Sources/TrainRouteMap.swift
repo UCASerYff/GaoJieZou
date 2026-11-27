@@ -53,48 +53,140 @@ struct TrainRouteMap: View {
     let destination:City?
     let journey:TrainJourney?
     let now:Date
-    var body:some View {
-        let g=TrainMapGeometry.cached(geography:geography,origin:origin,destination:destination)
-        Canvas { ctx,size in
-            ctx.fill(Path(CGRect(origin:.zero,size:size)),with:.linearGradient(Gradient(colors:[Color(red:0.07,green:0.17,blue:0.23),Color(red:0.12,green:0.29,blue:0.34)]),startPoint:.zero,endPoint:CGPoint(x:size.width,y:size.height)))
-            let inset:CGFloat=35,scale=min((size.width-inset*2)/g.bounds.width,(size.height-inset*2)/g.bounds.height)
-            let transform=CGAffineTransform(a:scale,b:0,c:0,d:scale,tx:size.width/2-g.bounds.midX*scale,ty:size.height/2-g.bounds.midY*scale)
-            for x in stride(from:CGFloat(0),through:size.width,by:40) { var p=Path();p.move(to:CGPoint(x:x,y:0));p.addLine(to:CGPoint(x:x,y:size.height));ctx.stroke(p,with:.color(.white.opacity(0.035)),lineWidth:1) }
-            for y in stride(from:CGFloat(0),through:size.height,by:40) { var p=Path();p.move(to:CGPoint(x:0,y:y));p.addLine(to:CGPoint(x:size.width,y:y));ctx.stroke(p,with:.color(.white.opacity(0.035)),lineWidth:1) }
-            for shape in g.shapes {
-                let path=shape.path.applying(transform)
-                let visited=shape.region.countryID==origin?.countryID || shape.region.countryID==destination?.countryID
-                ctx.fill(path,with:.color(visited ? Color(red:0.35,green:0.51,blue:0.47):Color(red:0.22,green:0.36,blue:0.39)))
-                ctx.stroke(path,with:.color(.white.opacity(0.25)),lineWidth:0.55)
-            }
-            guard let a=origin,let b=destination else {
-                ctx.draw(Text(tF("添加两个不同城市的足迹，即可规划行程","Record two cities to plan a journey")).font(.headline).foregroundColor(.white),at:CGPoint(x:size.width/2,y:size.height/2));return
-            }
-            let j=journey ?? TrainJourney(origin:a,destination:b,startedAt:now,arrivesAt:now.addingTimeInterval(120),reward:2)
-            let progress=journey?.progress(at:now) ?? 0
-            func point(_ t:Double)->CGPoint { let c=j.coordinate(at:t);return g.project(c.lon,c.lat).applying(transform) }
-            func line(_ end:Double)->Path {
-                var path=Path();var previous:CGPoint?
-                for i in 0...160 { let p=point(Double(i)/160*end)
-                    if let previous,abs(previous.x-p.x)<size.width*0.45 { path.addLine(to:p) } else { path.move(to:p) };previous=p
-                };return path
-            }
-            ctx.stroke(line(1),with:.color(.white.opacity(0.40)),style:StrokeStyle(lineWidth:2,dash:[5,6]))
-            if progress>0 { ctx.stroke(line(progress),with:.color(Color(red:0.35,green:0.94,blue:0.83)),style:StrokeStyle(lineWidth:3,lineCap:.round)) }
-            for (index,city) in [a,b].enumerated() {
-                let p=g.project(city.longitude,city.latitude).applying(transform)
-                ctx.fill(Path(ellipseIn:CGRect(x:p.x-5,y:p.y-5,width:10,height:10)),with:.color(index==0 ? .white:.orange))
-                let other=g.project(index==0 ? b.longitude:a.longitude,index==0 ? b.latitude:a.latitude).applying(transform)
-                let offset:CGFloat=p.y<=other.y ? -24:24
-                let close=hypot(p.x-other.x,p.y-other.y)<130
-                let label=CGPoint(x:min(size.width-75,max(75,p.x)),y:min(size.height-16,max(16,p.y+(close ? offset:-23))))
-                ctx.draw(Text(city.name).font(.system(size:12,weight:.semibold)).foregroundColor(.white),at:label)
-            }
-            let current=point(progress)
-            ctx.fill(Path(ellipseIn:CGRect(x:current.x-13,y:current.y-13,width:26,height:26)),with:.color(Color(red:0.22,green:0.81,blue:0.68)))
-            var trainIcon=ctx.resolve(Image(systemName:"tram.fill"));trainIcon.shading = .color(.white)
-            ctx.draw(trainIcon,in:CGRect(x:current.x-7,y:current.y-8,width:14,height:16))
+    var body: some View {
+        let geometry = TrainMapGeometry.cached(geography: geography, origin: origin, destination: destination)
+        Canvas { context, size in
+            drawMap(in: &context, size: size, geometry: geometry)
         }
-        .accessibilityLabel(Text((origin?.name ?? "")+" → "+(destination?.name ?? "")+" · "+String(Int((journey?.progress(at:now) ?? 0)*100))+"%"))
+        .accessibilityLabel(Text(accessibilitySummary))
+    }
+
+    private var accessibilitySummary: String {
+        let progress: Double = journey?.progress(at: now) ?? 0
+        let percent = Int(progress * 100)
+        return "\(origin?.name ?? "") → \(destination?.name ?? "") · \(percent)%"
+    }
+
+    private func drawMap(in context: inout GraphicsContext, size: CGSize, geometry: TrainMapGeometry) {
+        drawBackground(in: &context, size: size)
+
+        let inset: CGFloat = 35
+        let horizontalScale: CGFloat = (size.width - inset * 2) / geometry.bounds.width
+        let verticalScale: CGFloat = (size.height - inset * 2) / geometry.bounds.height
+        let scale = min(horizontalScale, verticalScale)
+        let tx: CGFloat = size.width / 2 - geometry.bounds.midX * scale
+        let ty: CGFloat = size.height / 2 - geometry.bounds.midY * scale
+        let transform = CGAffineTransform(a: scale, b: 0, c: 0, d: scale, tx: tx, ty: ty)
+
+        let visitedColor = Color(red: 0.35, green: 0.51, blue: 0.47)
+        let regionColor = Color(red: 0.22, green: 0.36, blue: 0.39)
+        let outline: GraphicsContext.Shading = .color(Color.white.opacity(0.25))
+        for shape in geometry.shapes {
+            let path = shape.path.applying(transform)
+            let country = shape.region.countryID
+            let visited = country == origin?.countryID || country == destination?.countryID
+            let color: Color = visited ? visitedColor : regionColor
+            context.fill(path, with: .color(color))
+            context.stroke(path, with: outline, lineWidth: 0.55)
+        }
+
+        guard let origin, let destination else {
+            let message = tF("添加两个不同城市的足迹，即可规划行程", "Record two cities to plan a journey")
+            let label: Text = Text(message).font(.headline).foregroundColor(.white)
+            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+            context.draw(label, at: center)
+            return
+        }
+        drawJourney(in: &context, size: size, geometry: geometry, transform: transform,
+                    origin: origin, destination: destination)
+    }
+
+    private func drawBackground(in context: inout GraphicsContext, size: CGSize) {
+        let gradient = Gradient(colors: [
+            Color(red: 0.07, green: 0.17, blue: 0.23),
+            Color(red: 0.12, green: 0.29, blue: 0.34),
+        ])
+        let farCorner = CGPoint(x: size.width, y: size.height)
+        let background: GraphicsContext.Shading = .linearGradient(gradient, startPoint: .zero, endPoint: farCorner)
+        context.fill(Path(CGRect(origin: .zero, size: size)), with: background)
+        let grid: GraphicsContext.Shading = .color(Color.white.opacity(0.035))
+        for x in stride(from: CGFloat.zero, through: size.width, by: 40) {
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: 0))
+            path.addLine(to: CGPoint(x: x, y: size.height))
+            context.stroke(path, with: grid, lineWidth: 1)
+        }
+        for y in stride(from: CGFloat.zero, through: size.height, by: 40) {
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: y))
+            path.addLine(to: CGPoint(x: size.width, y: y))
+            context.stroke(path, with: grid, lineWidth: 1)
+        }
+    }
+
+    private func drawJourney(
+        in context: inout GraphicsContext, size: CGSize, geometry: TrainMapGeometry,
+        transform: CGAffineTransform, origin: City, destination: City
+    ) {
+        let route = journey ?? TrainJourney(origin: origin, destination: destination, startedAt: now,
+                                            arrivesAt: now.addingTimeInterval(120), reward: 2)
+        let progress: Double = journey?.progress(at: now) ?? 0
+        let seamThreshold: CGFloat = size.width * 0.45
+
+        func point(_ fraction: Double) -> CGPoint {
+            let coordinate = route.coordinate(at: fraction)
+            return geometry.project(coordinate.lon, coordinate.lat).applying(transform)
+        }
+
+        func line(_ end: Double) -> Path {
+            var path = Path()
+            var previous: CGPoint?
+            for index in 0...160 {
+                let fraction: Double = Double(index) / 160 * end
+                let position = point(fraction)
+                if let previous, abs(previous.x - position.x) < seamThreshold {
+                    path.addLine(to: position)
+                } else {
+                    path.move(to: position)
+                }
+                previous = position
+            }
+            return path
+        }
+
+        let routeStyle = StrokeStyle(lineWidth: 2, dash: [5, 6])
+        context.stroke(line(1), with: .color(Color.white.opacity(0.40)), style: routeStyle)
+        if progress > 0 {
+            let progressColor = Color(red: 0.35, green: 0.94, blue: 0.83)
+            let progressStyle = StrokeStyle(lineWidth: 3, lineCap: .round)
+            context.stroke(line(progress), with: .color(progressColor), style: progressStyle)
+        }
+        let departure = geometry.project(origin.longitude, origin.latitude).applying(transform)
+        let arrival = geometry.project(destination.longitude, destination.latitude).applying(transform)
+        drawStation(in: &context, name: origin.name, position: departure, other: arrival, color: .white, size: size)
+        drawStation(in: &context, name: destination.name, position: arrival, other: departure, color: .orange, size: size)
+
+        let current = point(progress)
+        let marker = CGRect(x: current.x - 13, y: current.y - 13, width: 26, height: 26)
+        let markerColor = Color(red: 0.22, green: 0.81, blue: 0.68)
+        context.fill(Path(ellipseIn: marker), with: .color(markerColor))
+        var trainIcon = context.resolve(Image(systemName: "tram.fill"))
+        trainIcon.shading = .color(.white)
+        context.draw(trainIcon, in: CGRect(x: current.x - 7, y: current.y - 8, width: 14, height: 16))
+    }
+
+    private func drawStation(
+        in context: inout GraphicsContext, name: String, position: CGPoint, other: CGPoint,
+        color: Color, size: CGSize
+    ) {
+        let pin = CGRect(x: position.x - 5, y: position.y - 5, width: 10, height: 10)
+        context.fill(Path(ellipseIn: pin), with: .color(color))
+        let offset: CGFloat = position.y <= other.y ? -24 : 24
+        let distance: CGFloat = hypot(position.x - other.x, position.y - other.y)
+        let labelY: CGFloat = position.y + (distance < 130 ? offset : -23)
+        let x: CGFloat = min(size.width - 75, max(75, position.x))
+        let y: CGFloat = min(size.height - 16, max(16, labelY))
+        let label: Text = Text(name).font(.system(size: 12, weight: .semibold)).foregroundColor(.white)
+        context.draw(label, at: CGPoint(x: x, y: y))
     }
 }
