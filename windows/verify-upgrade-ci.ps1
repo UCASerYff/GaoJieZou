@@ -90,7 +90,10 @@ try {
     Stop-App $app
     $app = $null
 
+    Write-Output "Before upgrade: old MSI code $oldCode state $(State $oldCode); new MSI code $newCode state $(State $newCode)."
     Install $new 'upgrade-build6'
+    Write-Output "After upgrade: old state $(State $oldCode); new state $(State $newCode); CLI version $(& $cli --version)."
+    Select-String -LiteralPath (Join-Path $root 'upgrade-build6.log') -Pattern 'FindRelatedProducts|RemoveExistingProducts|ProductVersion|Property\((C|S)\): (OLDER_RHYTHM|NEWER_RHYTHM|ALLUSERS|MSIINSTALLPERUSER)|Product: .*uccessfully' | ForEach-Object { $_.Line }
     if ((State $oldCode) -gt 0 -or (State $newCode) -le 0) { throw 'MSI major upgrade did not replace the old product.' }
     if ((& $cli --version) -ne '4.12+6') { throw 'Wrong upgraded version.' }
     $app = Start-App
