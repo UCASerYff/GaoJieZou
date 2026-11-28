@@ -18,12 +18,12 @@ function ProductCode([string]$package) {
     $q = [char]96
     $sql = "SELECT $q"+"Value$q"+" FROM $q"+"Property$q"+" WHERE $q"+"Property$q"+" = 'ProductCode'"
     $view = $db.GetType().InvokeMember('OpenView','InvokeMethod',$null,$db,@($sql))
-    $view.GetType().InvokeMember('Execute','InvokeMethod',$null,$view,@())
+    [void]$view.GetType().InvokeMember('Execute','InvokeMethod',$null,$view,@())
     $record = $view.GetType().InvokeMember('Fetch','InvokeMethod',$null,$view,@())
     $value = $record.GetType().InvokeMember('StringData','GetProperty',$null,$record,@(1))
-    $view.GetType().InvokeMember('Close','InvokeMethod',$null,$view,@())
+    [void]$view.GetType().InvokeMember('Close','InvokeMethod',$null,$view,@())
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($db)
-    return $value
+    return ([guid]$value).ToString('B').ToUpperInvariant()
 }
 function State([string]$code) {
     return $installer.GetType().InvokeMember('ProductState','GetProperty',$null,$installer,@($code))
