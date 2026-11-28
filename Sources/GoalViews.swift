@@ -561,8 +561,26 @@ private struct LongGoalYearSlice: Identifiable {
     var id: String { "\(item.id)-\(year)" }
 }
 
+private func timelineTitleAxis<Slice: Identifiable>(
+    _ slices: [Slice], title: (Slice) -> String, labelWidth: CGFloat
+) -> some AxisContent where Slice.ID == String {
+    let titles = Dictionary(slices.map { ($0.id, title($0)) }, uniquingKeysWith: { first, _ in first })
+    return AxisMarks(position: .leading, values: slices.map(\.id)) { value in
+        AxisValueLabel(anchor: .trailing, collisionResolution: .disabled) {
+            if let id = value.as(String.self), let title = titles[id] {
+                Text(verbatim: title)
+                    .font(.caption)
+                    .lineLimit(1)
+                    .frame(maxWidth: labelWidth, alignment: .trailing)
+                    .help(title)
+            }
+        }
+    }
+}
+
 private struct LongGoalGanttChart: View {
     let goals: [LongGoal]
+    @ScaledMetric(relativeTo: .caption) private var rowHeight: CGFloat = 32
 
     private var items: [LongGoalGanttItem] {
         let calendar = Calendar.current
@@ -665,11 +683,12 @@ private struct LongGoalGanttChart: View {
                                 BarMark(
                                     xStart: .value(RhythmLocalization.text("开始"), slice.startDate),
                                     xEnd: .value(RhythmLocalization.text("结束"), slice.endDate),
-                                    y: .value(RhythmLocalization.text("长期目标"), slice.item.title),
+                                    y: .value(RhythmLocalization.text("长期目标"), slice.id),
                                     height: .fixed(14)
                                 )
                                 .foregroundStyle(slice.item.state.color)
                                 .cornerRadius(4)
+                                .accessibilityLabel(Text(verbatim: slice.item.title))
                             }
 
                             let today = Calendar.current.startOfDay(for: Date())
@@ -685,6 +704,7 @@ private struct LongGoalGanttChart: View {
                             }
                         }
                         .chartXScale(domain: bounds(for: year))
+                        .chartYScale(domain: yearSlices.map(\.id))
                         .chartLegend(.hidden)
                         .chartXAxis {
                             AxisMarks(values: axisDates(for: year)) {
@@ -692,8 +712,9 @@ private struct LongGoalGanttChart: View {
                                 AxisValueLabel(format: .dateTime.month(.abbreviated).locale(RhythmLocalization.language.locale))
                             }
                         }
+                        .chartYAxis { timelineTitleAxis(yearSlices, title: \.item.title, labelWidth: 136) }
                         .chartPlotStyle { plot in plot.padding(.horizontal, 8) }
-                        .frame(height: max(84, CGFloat(yearSlices.count) * 32 + 42))
+                        .frame(height: max(84, CGFloat(yearSlices.count) * rowHeight + 42))
                     }
                 }
             }
@@ -753,6 +774,7 @@ private struct ShortActionMonthPanel: View {
     let title: String
     let monthStart: Date
     let actions: [ShortAction]
+    @ScaledMetric(relativeTo: .caption) private var rowHeight: CGFloat = 28
 
     private var monthEnd: Date {
         Calendar.current.date(byAdding: .month, value: 1, to: monthStart)!
@@ -789,6 +811,7 @@ private struct ShortActionMonthPanel: View {
     }
 
     var body: some View {
+        let monthSlices = slices
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text(title).font(.subheadline.weight(.semibold))
@@ -797,21 +820,22 @@ private struct ShortActionMonthPanel: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
-            if slices.isEmpty {
+            if monthSlices.isEmpty {
                 Text(RhythmLocalization.text("暂无设置了时间跨度的行动"))
                     .font(.caption).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 106, alignment: .center)
             } else {
                 Chart {
-                    ForEach(slices) { slice in
+                    ForEach(monthSlices) { slice in
                         BarMark(
                             xStart: .value(RhythmLocalization.text("开始"), slice.startDate),
                             xEnd: .value(RhythmLocalization.text("结束"), slice.endDate),
-                            y: .value(RhythmLocalization.text("短期行动"), slice.action.title),
+                            y: .value(RhythmLocalization.text("短期行动"), slice.id),
                             height: .fixed(12)
                         )
                         .foregroundStyle(color(for: slice.action))
                         .cornerRadius(4)
+                        .accessibilityLabel(Text(verbatim: slice.action.title))
                     }
                     let today = Calendar.current.startOfDay(for: Date())
                     if today >= monthStart, today < monthEnd {
@@ -821,6 +845,7 @@ private struct ShortActionMonthPanel: View {
                     }
                 }
                 .chartXScale(domain: monthStart...monthEnd)
+                .chartYScale(domain: monthSlices.map(\.id))
                 .chartLegend(.hidden)
                 .chartXAxis {
                     AxisMarks(values: axisDates) {
@@ -828,7 +853,8 @@ private struct ShortActionMonthPanel: View {
                         AxisValueLabel(format: .dateTime.day())
                     }
                 }
-                .frame(height: max(112, CGFloat(slices.count) * 28 + 38))
+                .chartYAxis { timelineTitleAxis(monthSlices, title: \.action.title, labelWidth: 96) }
+                .frame(height: max(112, CGFloat(monthSlices.count) * rowHeight + 38))
             }
         }
         .padding(12)
