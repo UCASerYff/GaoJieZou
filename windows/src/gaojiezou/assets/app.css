@@ -99,7 +99,7 @@ progress::-webkit-progress-value { border-radius: 12px; background: var(--green)
   overflow: auto; z-index: 5;
 }
 .brand { justify-self: stretch; justify-content: flex-start; min-height: 45px; padding: 3px 6px; gap: 9px; font-size: 16px; }
-.brand img { border-radius: 8px; object-fit: contain; }
+.brand img { object-fit: contain; }
 .brand strong { font-weight: 700; white-space: nowrap; }
 .workspaces,.rail-actions { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .rail-actions { padding-top: 11px; border-top: 1px solid var(--line); }

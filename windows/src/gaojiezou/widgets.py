@@ -17,7 +17,7 @@ from typing import NamedTuple
 from gaojiezou.desktop import habit_counts, route_index
 from gaojiezou.errors import AppError
 from gaojiezou.health import ISLAND_LEVEL_MARKS, prosperity
-from gaojiezou.resources import artwork, asset_dir
+from gaojiezou.resources import asset_dir
 from gaojiezou.timeutil import from_cocoa
 
 TABS = (
@@ -417,11 +417,13 @@ class Widgets:
         header = tk.Frame(self.shell, bg=palette.surface)
         header.pack(fill="x", padx=self._px(17), pady=(self._px(14), self._px(8)))
         if not self.brand_image:
-            icon = artwork("GaoJieZouIcon.png")
-            if icon and icon.is_file():
-                source = tk.PhotoImage(master=self.root, file=str(icon))
-                factor = max(1, math.ceil(source.width() / self._px(32)))
-                self.brand_image = source.subsample(factor, factor)
+            target = self._px(32)
+            size = min((32, 40, 48, 56, 64), key=lambda pixels: abs(pixels - target))
+            icon = asset_dir() / f"GaoJieZouMark-{size}.png"
+            self.brand_image = tk.PhotoImage(master=self.root, file=str(icon))
+            try:
+                self.root.iconbitmap(str(asset_dir() / "GaoJieZou.ico"))
+            except tk.TclError:
                 self.root.iconphoto(False, self.brand_image)
         if self.brand_image:
             tk.Label(header, image=self.brand_image, bg=palette.surface).pack(side="left", padx=(0, self._px(8)))

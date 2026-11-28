@@ -19,6 +19,7 @@ from gaojiezou import library
 from gaojiezou.appwindow import EdgeWindow, bind as _binding, find_edge
 from gaojiezou.errors import AppError
 from gaojiezou.notifications import ToastResult, set_process_identity, submit_habit_toast
+from gaojiezou.resources import asset_dir
 from gaojiezou.store import _habit_key, _scheduled
 
 LOG = logging.getLogger(__name__)
@@ -31,10 +32,14 @@ ROUTES = (
 )
 DISPLAY_GUID = uuid.UUID("2b84c20e-ad23-4ddf-93db-05ffbd7efca5").bytes_le
 MSG_ENDSESSION, MSG_TIMER, MSG_POWER, MSG_SESSION = 0x16, 0x113, 0x218, 0x2B1
+MSG_SETTINGCHANGE, MSG_DISPLAYCHANGE, MSG_DPICHANGED = 0x1A, 0x7E, 0x2E0
 MSG_TRAY, MSG_OPEN, MSG_STOP = 0x8001, 0x8002, 0x8003
 NIM_ADD, NIM_MODIFY, NIM_DELETE, NIM_SETVERSION = 0, 1, 2, 4
+NIF_MESSAGE, NIF_ICON = 0x01, 0x02
 TOOLTIP_FLAGS = 0x84  # NIF_TIP | NIF_SHOWTIP (standard tooltip with version 4).
 TOOLTIP_RETRY_SECONDS = 10
+TRAY_RETRY_SECONDS = 5
+SM_CXSMICON, IMAGE_ICON, LR_LOADFROMFILE = 49, 1, 0x10
 
 
 def route_index(uri: str | None) -> int:
@@ -212,6 +217,49 @@ class NotifyIcon(C.Structure):
     ]
 
 
+class _TrayIconSource:
+    def __init__(self, user, shell):
+        self.find_window = _binding(user, "FindWindowW", W.HWND, W.LPCWSTR, W.LPCWSTR)
+        self.window_dpi = (_binding(user, "GetDpiForWindow", W.UINT, W.HWND)
+                           if hasattr(user, "GetDpiForWindow") else None)
+        self.system_dpi = (_binding(user, "GetDpiForSystem", W.UINT)
+                           if hasattr(user, "GetDpiForSystem") else None)
+        self.dpi_metric = (_binding(user, "GetSystemMetricsForDpi", C.c_int, C.c_int, W.UINT)
+                           if hasattr(user, "GetSystemMetricsForDpi") else None)
+        self.system_metric = _binding(user, "GetSystemMetrics", C.c_int, C.c_int)
+        self.load_image = _binding(user, "LoadImageW", W.HANDLE, W.HINSTANCE, W.LPCWSTR,
+                                   W.UINT, C.c_int, C.c_int, W.UINT)
+        self.extract_icon = _binding(shell, "SHDefExtractIconW", W.LONG, W.LPCWSTR, C.c_int, W.UINT,
+                                     C.POINTER(W.HICON), C.POINTER(W.HICON), W.UINT)
+        self.load_stock = _binding(user, "LoadIconW", W.HICON, W.HINSTANCE, C.c_void_p)
+        self.copy_image = _binding(user, "CopyImage", W.HANDLE, W.HANDLE, W.UINT, C.c_int, C.c_int, W.UINT)
+        self.destroy = _binding(user, "DestroyIcon", W.BOOL, W.HICON)
+
+    def pixels(self) -> int:
+        # The notification area belongs to Explorer, not our invisible host or browser window.
+        taskbar = self.find_window("Shell_TrayWnd", None)
+        dpi = self.window_dpi(taskbar) if taskbar and self.window_dpi else 0
+        if not dpi and self.system_dpi:
+            dpi = self.system_dpi()
+        if dpi and self.dpi_metric:
+            pixels = self.dpi_metric(SM_CXSMICON, dpi)
+            return pixels if pixels > 0 else (16 * dpi + 48) // 96
+        return max(0, self.system_metric(SM_CXSMICON)) or 16
+
+    def load(self, pixels: int) -> tuple[int | None, bool]:
+        path = asset_dir() / "GaoJieZou.ico"
+        if icon := self.load_image(None, str(path), IMAGE_ICON, pixels, pixels, LR_LOADFROMFILE):
+            return icon, True
+        if getattr(sys, "frozen", False):
+            icon = W.HICON()
+            if self.extract_icon(sys.executable, 0, 0, C.byref(icon), None, pixels) == 0 and icon.value:
+                return icon.value, True
+        stock = self.load_stock(None, 32512)  # Shared IDI_APPLICATION.
+        if stock and (scaled := self.copy_image(stock, IMAGE_ICON, pixels, pixels, 0)):
+            return scaled, scaled != stock
+        return stock, False
+
+
 def _instance_name(directory: Path) -> str:
     key = os.path.normcase(str(directory.resolve()))
     return "GaoJieZou.Rhythm." + hashlib.sha256(key.encode("utf-8")).hexdigest()[:24]
@@ -252,15 +300,23 @@ class DesktopInstance:
 
 
 class WindowsDesktop:
-    def __init__(self, server, name: str, tray: bool = True, allow_main: bool = True):
+    def __init__(self, server, name: str, tray: bool = True, allow_main: bool = True, *,
+                 relaunch: tuple[str, ...] | None = None):
         self.server = server
         self.name = name
         self.tray = tray
         self.allow_main = allow_main
+        self.relaunch = relaunch
         self.browser = None
         self.window = None
         self.widget = None
         self.tray_added = False
+        self.icon = None
+        self._tray_icons = None
+        self._tray_icon_pixels = None
+        self._tray_icon_owned = False
+        self._tray_dpi_check = False
+        self._tray_retry_at = None
         self._sent_tooltip = None
         self._tooltip_retry_at = 0.0
         self.failure = None
@@ -292,7 +348,7 @@ class WindowsDesktop:
             return
         if self.browser is None:
             if executable := find_edge():
-                self.browser = EdgeWindow(executable)
+                self.browser = EdgeWindow(executable, relaunch=self.relaunch)
         target = self.server.url + f"?desktop={self.server.window_revision}"
         if self.browser is not None:
             link = "gaojiezou://" + ROUTES[route] if route else ""
@@ -375,11 +431,13 @@ class WindowsDesktop:
         self.session_registered = bool(register_session(window, 0))
         power = register_power(window, C.byref(GUID((C.c_ubyte * 16).from_buffer_copy(DISPLAY_GUID))), 0)
         self.display_registered = bool(power)
-        self.icon = self._load_icon(shell)
-        self.tray_added = self.tray and self._register_icon()
-        timer_id = timer(window, 1, 1000, None)
-        self.ready.set()
+        timer_id = 0
         try:
+            if self.tray:
+                self._tray_icons = _TrayIconSource(user, shell)
+                self._sync_tray_icon()
+            timer_id = timer(window, 1, 1000, None)
+            self.ready.set()
             msg = W.MSG()
             while (status := get_message(C.byref(msg), None, 0, 0)) > 0:
                 dispatch(C.byref(msg))
@@ -390,12 +448,11 @@ class WindowsDesktop:
                 self.widget.close()
             if timer_id:
                 kill_timer(window, timer_id)
-            if self.tray_added:
+            if self.tray_added or self._tray_retry_at is not None:
                 self.notify_icon(NIM_DELETE, C.byref(self._notification()))
+            self._release_tray_icon()
             if self.browser:
                 self.browser.close()
-            if self.icon and getattr(sys, "frozen", False):
-                _binding(user, "DestroyIcon", W.BOOL, W.HICON)(self.icon)
             if power:
                 unregister_power(power)
             if self.session_registered:
@@ -404,15 +461,47 @@ class WindowsDesktop:
             self.window = None
             unregister(self.name, module)
 
-    def _load_icon(self, shell):
-        if getattr(sys, "frozen", False):
-            icon = W.HICON()
-            extract = _binding(shell, "ExtractIconExW", W.UINT, W.LPCWSTR, C.c_int,
-                               C.POINTER(W.HICON), C.POINTER(W.HICON), W.UINT)
-            if extract(sys.executable, 0, None, C.byref(icon), 1) == 1:
-                return icon.value
-            return None
-        return _binding(self.user, "LoadIconW", W.HICON, W.HINSTANCE, C.c_void_p)(None, 32512)
+    def _release_tray_icon(self) -> None:
+        if self.icon and self._tray_icon_owned:
+            self._tray_icons.destroy(self.icon)
+        self.icon = None
+        self._tray_icon_owned = False
+        self._tray_icon_pixels = None
+
+    def _sync_tray_icon(self, *, restore: bool = False) -> None:
+        changed = False
+        if self._tray_icons:
+            pixels = self._tray_icons.pixels()
+            if pixels != self._tray_icon_pixels:
+                handle, owned = self._tray_icons.load(pixels)
+                if not handle:
+                    self._tray_retry_at = time.monotonic() + TRAY_RETRY_SECONDS
+                    return
+                # Explorer copies the image. Keep the new handle for a restart or retry.
+                self._release_tray_icon()
+                self.icon, self._tray_icon_owned, self._tray_icon_pixels = handle, owned, pixels
+                changed = True
+
+        if restore or not self.tray_added:
+            self.tray_added = self._register_icon()
+            sent = self.tray_added
+        elif changed:
+            icon = self._notification()
+            icon.flags, icon.icon = NIF_ICON, self.icon
+            sent = bool(self.notify_icon(NIM_MODIFY, C.byref(icon)))
+        else:
+            sent = True
+        self._tray_retry_at = None if sent else time.monotonic() + TRAY_RETRY_SECONDS
+
+    def _maintain_tray_icon(self) -> None:
+        if not self.tray or self.server.shutdown_requested.is_set() or getattr(self.server, "exiting", False):
+            return
+        retry = self._tray_retry_at
+        if retry is not None and time.monotonic() < retry:
+            return
+        if self._tray_dpi_check or retry is not None:
+            self._tray_dpi_check = False
+            self._sync_tray_icon(restore=retry is not None)
 
     def _notification(self) -> NotifyIcon:
         icon = NotifyIcon()
@@ -423,13 +512,12 @@ class WindowsDesktop:
 
     def _register_icon(self) -> bool:
         icon = self._notification()
-        icon.flags = 0x03 | TOOLTIP_FLAGS  # Callback, icon and standard tooltip.
+        icon.flags = NIF_MESSAGE | NIF_ICON | TOOLTIP_FLAGS
         icon.callback = MSG_TRAY
         icon.icon = self.icon
         with self.server.lock:
             icon.tip = focus_tray_tooltip(self.server.store)
-        if not self.notify_icon(NIM_ADD, C.byref(icon)) and (
-                not self.tray_added or not self.notify_icon(NIM_MODIFY, C.byref(icon))):
+        if not self.notify_icon(NIM_ADD, C.byref(icon)) and not self.notify_icon(NIM_MODIFY, C.byref(icon)):
             return False
         icon.version = 4
         self.notify_icon(NIM_SETVERSION, C.byref(icon))
@@ -489,12 +577,16 @@ class WindowsDesktop:
                 return 1
             elif message == MSG_TIMER:
                 self.background.tick()
+                self._maintain_tray_icon()
                 self._refresh_tray_tooltip()
-                if self.browser and not self.browser.seen:
-                    self.browser.window()
+                if self.browser:
+                    self.browser.maintain_window()
             elif (self.taskbar_restored and message == self.taskbar_restored and self.tray
                   and not self.server.shutdown_requested.is_set() and not getattr(self.server, "exiting", False)):
-                self.tray_added = self._register_icon()
+                self._sync_tray_icon(restore=True)
+                self._tray_dpi_check = True  # Explorer can finish applying DPI after its broadcast.
+            elif message in (MSG_SETTINGCHANGE, MSG_DISPLAYCHANGE, MSG_DPICHANGED):
+                self._tray_dpi_check = self.tray
             elif message == MSG_TRAY:
                 event = lparam & 0xFFFF
                 if getattr(self.server, "exiting", False):

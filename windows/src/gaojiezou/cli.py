@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -72,7 +73,13 @@ def _run(args, directory: Path, instance: DesktopInstance | None, route: int) ->
     server = serve(store, port=args.port, open_browser=False)
     console_build = getattr(sys, "frozen", False) and Path(sys.executable).stem.lower().endswith("-cli")
     tray = not (args.no_browser or args.serve or console_build)
-    desktop = WindowsDesktop(server, instance.name, tray=tray, allow_main=not args.no_browser) if instance else None
+    relaunch = None
+    if tray and getattr(sys, "frozen", False):
+        relaunch = (sys.executable,)
+        if args.data_dir or os.environ.get("GAOJIEZOU_DATA_DIR"):
+            relaunch += ("--data-dir", str(directory.resolve()))
+    desktop = WindowsDesktop(server, instance.name, tray=tray, allow_main=not args.no_browser,
+                             relaunch=relaunch) if instance else None
     try:
         if desktop:
             desktop.start()

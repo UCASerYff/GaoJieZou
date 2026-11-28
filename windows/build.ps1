@@ -52,50 +52,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $resources "en.lproj\Localizable.strings") -Destination $macAssets -Force
     Copy-Item -LiteralPath (Join-Path $repo "Integrated\Health\Resources\IslandSceneArt.png") -Destination $macAssets -Force
 
-    $icon = Join-Path $stage "GaoJieZou.ico"
-    Add-Type -AssemblyName System.Drawing
-    $image = [System.Drawing.Image]::FromFile((Join-Path $macAssets "GaoJieZouIcon.png"))
-    $writer = [System.IO.BinaryWriter]::new([IO.File]::Create($icon))
-    try {
-        $sizes = @(16, 32, 48, 256)
-        $writer.Write([uint16]0)
-        $writer.Write([uint16]1)
-        $writer.Write([uint16]$sizes.Count)
-        $offset = 6 + 16 * $sizes.Count
-        $frames = @()
-        foreach ($size in $sizes) {
-            $bitmap = [System.Drawing.Bitmap]::new($size, $size)
-            $canvas = [System.Drawing.Graphics]::FromImage($bitmap)
-            $png = [System.IO.MemoryStream]::new()
-            try {
-                $canvas.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-                $canvas.DrawImage($image, 0, 0, $size, $size)
-                $bitmap.Save($png, [System.Drawing.Imaging.ImageFormat]::Png)
-                $bytes = $png.ToArray()
-                $frames += ,$bytes
-                $writer.Write([byte]($size % 256))
-                $writer.Write([byte]($size % 256))
-                $writer.Write([uint16]0)
-                $writer.Write([uint16]1)
-                $writer.Write([uint16]32)
-                $writer.Write([uint32]$bytes.Length)
-                $writer.Write([uint32]$offset)
-                $offset += $bytes.Length
-            }
-            finally {
-                $png.Dispose()
-                $canvas.Dispose()
-                $bitmap.Dispose()
-            }
-        }
-        foreach ($frame in $frames) {
-            $writer.Write([byte[]]$frame)
-        }
-    }
-    finally {
-        $writer.Dispose()
-        $image.Dispose()
-    }
+    $icon = Join-Path $PSScriptRoot "src\gaojiezou\assets\GaoJieZou.ico"
 
     $versionFile = Join-Path $stage "version.txt"
     $versionResource = @"

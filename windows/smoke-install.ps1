@@ -74,8 +74,15 @@ try {
             if (-not (Test-Path -LiteralPath (Join-Path $programMenu $shortcut))) { throw "MSI shortcut missing: $shortcut" }
         }
         $shell = New-Object -ComObject WScript.Shell
+        $appLink = $shell.CreateShortcut((Join-Path $programMenu "GaoJieZou.lnk"))
         $widgetLink = $shell.CreateShortcut((Join-Path $programMenu "Rhythm Desktop Widgets.lnk"))
+        if ($appLink.TargetPath -ne $gui -or $appLink.Arguments) { throw "Main shortcut is incorrect." }
         if ($widgetLink.TargetPath -ne $gui -or $widgetLink.Arguments -ne "--widgets") { throw "Widget shortcut is incorrect." }
+        foreach ($link in @($appLink, $widgetLink)) {
+            if ($link.IconLocation -and $link.IconLocation -notin @(",0", "$gui,0")) {
+                throw "The shortcut must use the installed executable icon."
+            }
+        }
         $identity = Get-Item -LiteralPath $appIdentity
         $registeredActivator = $identity.GetValue("CustomActivator")
         if ($identity.GetValue("RhythmExecutable") -ne $gui -or -not $registeredActivator) { throw "Toast identity registration is incomplete." }
@@ -131,7 +138,7 @@ try {
         else { Invoke-ApiPost "/api/library/create" | Out-Null }
         Invoke-ApiPost "/api/habits/save" '{"title":"MSI smoke habit","rewardCoins":4}' | Out-Null
         if ((Read-State).library.habits.title -notcontains "MSI smoke habit") { throw "Installed GUI did not read the saved habit." }
-        $assets = @("/art/GaoJieZouIcon.png", "/art/EstateMeadowV352.png", "/art/AquariumPanoramaV352.png",
+        $assets = @("/GaoJieZou.ico", "/GaoJieZouMark.png", "/art/EstateMeadowV352.png", "/art/AquariumPanoramaV352.png",
                     "/art/WorldMaterialsV357.png", "/art/FoliageV357.png", "/footprints-prefectures.json", "/gao-world.js")
         foreach ($asset in $assets) {
             $content = $http.GetByteArrayAsync("$url$asset").GetAwaiter().GetResult()

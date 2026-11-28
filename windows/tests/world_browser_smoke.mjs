@@ -166,8 +166,21 @@ try {
   await cdp("Page.navigate",{url:base+"/"});
   await until("window.Gao?.state?.status==='ready'");
 
-  assert.equal(await js("Gao.state.version"),"4.12+5");
+  assert.equal(await js("Gao.state.version"),"4.12+6");
   assert.equal(await js("document.querySelector('.navigation-rail [aria-current=page]').dataset.go"),"today");
+  for (const [width, markSize] of [[1280, 34], [605, 28]]) {
+    for (const deviceScaleFactor of [1, 1.25, 1.5, 1.75, 2]) {
+      await cdp("Emulation.setDeviceMetricsOverride",{width,height:840,deviceScaleFactor,mobile:false});
+      const mark=await js(`(async () => {
+        const image=document.querySelector('.brand img');
+        await image.decode();
+        const box=image.getBoundingClientRect();
+        return [devicePixelRatio,box.width,box.height,image.naturalWidth,document.querySelector('link[rel=icon]').href];
+      })()`);
+      assert.deepEqual(mark,[deviceScaleFactor,markSize,markSize,128,base+"/GaoJieZou.ico"]);
+    }
+  }
+  await cdp("Emulation.setDeviceMetricsOverride",{width:1280,height:840,deviceScaleFactor:1.5,mobile:false});
   await screenshot("core-today-light");
   await click('main [data-action="rhythm:focus-start"]');
   await until("!!Gao.state.library.activeFocus");
