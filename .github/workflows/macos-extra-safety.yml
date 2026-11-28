@@ -1,0 +1,56 @@
+name: macOS widget registration and fishing regression
+on:
+  push:
+    branches: ['codex/macos-extra-safety-20261128-2d8a93b']
+permissions:
+  contents: read
+jobs:
+  synthetic:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Isolated synthetic registration and fishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == arm64 && "$(sw_vers -productVersion)" == 15.* ]]
+          [[ "$(git rev-parse HEAD^)" == 2d8a93bea5d2cd1f007c2ec97e835983cff4e009 ]]
+          [[ "$(git diff --name-only HEAD^ HEAD)" == .github/workflows/macos-extra-safety.yml ]]
+          xcodebuild -version
+
+          scratch=$(mktemp -d /private/tmp/rhythm-extra-safety.XXXXXXXX)
+          trap 'rm -rf -- "$scratch"' EXIT
+          source_root="$scratch/source.noindex"
+          mkdir -p -- "$source_root" "$scratch/tmp"
+          git archive HEAD^ | tar -xf - -C "$source_root"
+          export TMPDIR="$scratch/tmp/"
+          cd "$source_root"
+
+          failed=0
+          for test in test_install_widget_registration test_widget_registration; do
+            echo "::group::$test"
+            if python3 -B "Tests/$test.py"; then
+              echo "PASS $test"
+            else
+              echo "::error title=$test::Synthetic registration regression failed"
+              failed=1
+            fi
+            echo '::endgroup::'
+          done
+          echo '::group::FishingSessionTests'
+          if xcrun swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 \
+              -module-cache-path "$scratch/cache" Sources/FishingSession.swift Tests/FishingSessionTests.swift \
+              -o "$scratch/fishing-session" && "$scratch/fishing-session"; then
+            echo 'PASS FishingSessionTests'
+          else
+            echo '::error title=FishingSessionTests::Native fishing regression failed'
+            failed=1
+          fi
+          echo '::endgroup::'
+          exit "$failed"
