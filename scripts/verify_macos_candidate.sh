@@ -44,7 +44,7 @@ def verify_bundle(plist_path, executable_dir, identifier, kind, executable_name)
     assert (metadata['CFBundleIdentifier'], metadata['CFBundlePackageType'], metadata['CFBundleExecutable']) == (
         identifier, kind, executable_name
     ), (plist_path, metadata)
-    assert (metadata['CFBundleShortVersionString'], metadata['CFBundleVersion']) == ('4.12', '14'), plist_path
+    assert (metadata['CFBundleShortVersionString'], metadata['CFBundleVersion']) == ('4.13', '15'), plist_path
     executable = executable_dir / executable_name
     archs = subprocess.check_output(['xcrun', 'lipo', '-archs', str(executable)], text=True).split()
     assert archs == ['arm64'], (executable, archs)

@@ -6,6 +6,7 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from urllib.request import Request, urlopen
+from uuid import uuid4
 
 import pytest
 
@@ -210,10 +211,12 @@ def test_health_csv_uses_mac_filenames_and_import_does_not_reward(tmp_path):
     exported = list(csv.DictReader(io.StringIO(files["meal.csv"].removeprefix("\ufeff"))))
     assert exported[0]["name"] == "'=1+2"
     assert exported[0]["note"] == note
+    assert exported[0]["text_escape_v1"] == "1"
     assert target.import_csv(files, NOW) == {"added": 2, "skipped": 0, "invalid": 0}
     assert target.import_csv(files, NOW) == {"added": 0, "skipped": 2, "invalid": 0}
     imported = target.summary(NOW)["records"][0]
     assert imported["id"] == meal["id"]
+    assert imported["title"] == "=1+2"
     assert imported["note"] == note
     assert imported["rewardEligible"] is False
     assert imported["fullnessPercent"] == 0
@@ -221,3 +224,85 @@ def test_health_csv_uses_mac_filenames_and_import_does_not_reward(tmp_path):
     assert target.state["ledgers"] == {}
     source.close()
     target.close()
+
+
+def test_health_csv_preserves_formula_guards_and_literal_apostrophes(tmp_path):
+    source = HealthStore(tmp_path / "source", timezone.utc)
+    target = HealthStore(tmp_path / "target", timezone.utc)
+    source.create_fresh(NOW)
+    target.create_fresh(NOW)
+    formula_title = "=" + "P" * 199
+    formula_note = '	 + follow-up,\r\n"引号"'
+    literal_title, literal_note = "'=Pace", "'@literal"
+    formula = source.save_record({"kind": "meal", "amount": 1, "title": formula_title, "note": formula_note}, NOW)
+    literal = source.save_record({"kind": "meal", "amount": 1, "title": literal_title, "note": literal_note}, NOW)
+    source_type = source.save_event_type({"name": "@Rehab"}, NOW)
+    target_type = target.save_event_type({"name": "@Rehab"}, NOW)
+    event_note = "-" + "n" * 1999
+    event = source.save_event({"typeID": source_type["id"], "count": 2, "note": event_note}, NOW)
+
+    with zipfile.ZipFile(io.BytesIO(source.export_csv())) as archive:
+        files = {name: archive.read(name).decode("utf-8-sig") for name in ("meal.csv", "custom-events.csv")}
+    meals = {row["id"]: row for row in csv.DictReader(io.StringIO(files["meal.csv"], newline=""))}
+    assert (meals[formula["id"]]["name"], meals[formula["id"]]["note"], meals[formula["id"]]["text_escape_v1"]) == (
+        "'" + formula_title, "'" + formula_note, "3"
+    )
+    assert (meals[literal["id"]]["name"], meals[literal["id"]]["note"], meals[literal["id"]]["text_escape_v1"]) == (
+        literal_title, literal_note, "0"
+    )
+    exported_event, = csv.DictReader(io.StringIO(files["custom-events.csv"], newline=""))
+    assert exported_event["name"] == "'@Rehab" and exported_event["note"] == "'" + event_note
+    assert exported_event["text_escape_v1"] == "3"
+    assert source_type["id"] != target_type["id"]
+    assert target.import_csv(files, NOW) == {"added": 3, "skipped": 0, "invalid": 0}
+    assert target.import_csv(files, NOW) == {"added": 0, "skipped": 3, "invalid": 0}
+    imported = {row["id"]: row for row in target.state["records"]}
+    assert (imported[formula["id"]]["title"], imported[formula["id"]]["note"]) == (formula_title, formula_note)
+    assert (imported[literal["id"]]["title"], imported[literal["id"]]["note"]) == (literal_title, literal_note)
+    assert target.state["events"] == [{
+        "id": event["id"], "typeID": target_type["id"], "note": event_note,
+        "count": 2, "occurredAt": cocoa(NOW), "source": "import",
+    }]
+    assert all(not row["rewardEligible"] for row in imported.values())
+    assert target.state["island"]["energy"] == 60 and target.state["ledgers"] == {}
+    source.close()
+    target.close()
+
+
+def test_health_csv_legacy_text_invalid_rows_and_atomic_rollback(tmp_path):
+    store = HealthStore(tmp_path, timezone.utc)
+    store.create_fresh(NOW)
+    stamp = "2026-02-28T11:00:00.125+01:00"
+    valid_id, rollback_id = (str(uuid4()).upper() for _ in range(2))
+
+    def document(header, rows):
+        output = io.StringIO(newline="")
+        writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+        writer.writerow(header)
+        writer.writerows(rows)
+        return output.getvalue()
+
+    header = ("id", "occurred_at", "name", "amount", "note")
+    legacy = document(header, [(valid_id, stamp, "'=literal", 300, "'+literal")])
+    assert store.import_csv({"water.csv": legacy}, NOW) == {"added": 1, "skipped": 0, "invalid": 0}
+    record = store.state["records"][0]
+    assert (record["title"], record["note"]) == ("'=literal", "'+literal")
+    assert record["occurredAt"] == cocoa(datetime.fromisoformat(stamp))
+
+    bad_dates = ["", "not a timestamp", "2026-02-30T10:00:00Z", "2999-01-01T00:00:00Z"]
+    rows = [(str(uuid4()), value, "invalid date", 1, "") for value in bad_dates]
+    rows.append((str(uuid4()),))
+    rows.append((valid_id, stamp, "'=literal", 300, "'+literal"))
+    report = store.import_csv({"water.csv": document(header, rows)}, NOW)
+    assert report == {"added": 0, "skipped": 1, "invalid": 5}
+    flagged = document((*header, "text_escape_v1"), [(str(uuid4()), stamp, "no guard", 1, "", 1)])
+    assert store.import_csv({"water.csv": flagged}, NOW) == {"added": 0, "skipped": 0, "invalid": 1}
+
+    valid = document(header, [(rollback_id, stamp, "rollback", 1, "")])
+    for malformed in ('"id","name"\r\n"truncated"', '"id","occurred_at"\r\n"unterminated'):
+        with pytest.raises(AppError):
+            store.import_csv({"water.csv": valid, "custom-events.csv": malformed}, NOW)
+        assert [row["id"] for row in store.state["records"]] == [valid_id]
+    with sqlite3.connect(store.path) as db:
+        assert db.execute("SELECT count(*) FROM records").fetchone() == (1,)
+    store.close()

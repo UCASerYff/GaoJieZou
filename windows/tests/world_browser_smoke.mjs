@@ -166,7 +166,7 @@ try {
   await cdp("Page.navigate",{url:base+"/"});
   await until("window.Gao?.state?.status==='ready'");
 
-  assert.equal(await js("Gao.state.version"),"4.12+6");
+  assert.equal(await js("Gao.state.version"),"4.13+7");
   assert.equal(await js("document.querySelector('.navigation-rail [aria-current=page]').dataset.go"),"today");
   for (const [width, markSize] of [[1280, 34], [605, 28]]) {
     for (const deviceScaleFactor of [1, 1.25, 1.5, 1.75, 2]) {

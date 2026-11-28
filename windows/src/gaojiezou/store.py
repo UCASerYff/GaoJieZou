@@ -26,6 +26,7 @@ AUTHORITY = {
     "modulePaths": {"health": "Modules/Health", "footprints": "Modules/Footprints"},
     "sharedSleepPath": "SharedSleep",
 }
+FISH_BITE_DURATION = 5.0
 
 
 class RhythmStore:
@@ -723,12 +724,16 @@ class RhythmStore:
 
     def cast_line(self) -> dict:
         self._ready()
+        moment = self.now()
+        cast_at = cocoa(moment)
+        if (self.cast and not self.cast["resolved"]
+                and cast_at < self.cast["biteAt"] + FISH_BITE_DURATION):
+            return {"biteAt": self.cast["biteAt"]}
         if self.library["bait"] <= 0:
             raise AppError("没有鱼饵。", "unavailable")
-        moment = self.now()
         wait = random.uniform(1.8, 3.8)
         bite = moment + timedelta(seconds=0.8 + max(1, wait))
-        self.cast = {"castAt": cocoa(moment), "biteAt": cocoa(bite), "resolved": False}
+        self.cast = {"castAt": cast_at, "biteAt": cocoa(bite), "resolved": False}
         return {"biteAt": self.cast["biteAt"]}
 
     def move_pasture_animal(self, resident_id: str, index: int) -> None:
@@ -748,10 +753,8 @@ class RhythmStore:
         self._ready()
         if not self.cast or self.cast.get("resolved"):
             raise AppError("还没有抛竿。", "invalid")
-        moment = self.now()
-        bite = from_cocoa(self.cast["biteAt"])
-        elapsed = moment.timestamp() - bite.timestamp()
-        if elapsed < 0 or elapsed > 5:
+        elapsed = cocoa(self.now()) - self.cast["biteAt"]
+        if elapsed < 0 or elapsed >= FISH_BITE_DURATION:
             self.cast["resolved"] = True
             return {"hooked": False, "reason": "不在咬钩窗口内，未消耗鱼饵。"}
         marker = (math.sin(max(0, elapsed) * 2.4 - math.pi / 2) + 1) / 2

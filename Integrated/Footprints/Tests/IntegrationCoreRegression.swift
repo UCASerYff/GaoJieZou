@@ -120,6 +120,7 @@ func tF(_ zh: String, _ en: String) -> String { zh }
         // Historical objects with SQLite-looking names are byte evidence, not
         // additional live stores. Include binary xattrs and an empty directory.
         let opaque = root.appendingPathComponent("Snapshots/opaque.sqlite")
+        try fm.createDirectory(at: opaque.deletingLastPathComponent(), withIntermediateDirectories: true)
         let opaqueBytes = Data([0, 255, 1, 2, 0])
         try opaqueBytes.write(to: opaque)
         try Data([255, 254]).write(to: root.appendingPathComponent("Snapshots/opaque.sqlite-wal"))

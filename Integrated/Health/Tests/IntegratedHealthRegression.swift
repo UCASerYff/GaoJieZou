@@ -22,6 +22,95 @@ final class UserDefaults {
         do { try operation() } catch { failed = true }
         try must(failed, message)
     }
+
+    static func healthCSV(in root: URL) throws {
+        let now = Date(timeIntervalSince1970: 1_795_514_400)
+        let before = now.addingTimeInterval(-60)
+        let db = try HealthDatabase(directory: root.appendingPathComponent("CSVHealth", isDirectory: true))
+        var targetType = HealthEventType()
+        targetType.name = "@Rehab"
+        try db.transaction(now: now) { $0.eventTypes.append(targetType) }
+
+        var guarded = HealthRecord(kind: .meal)
+        guarded.title = "=" + String(repeating: "P", count: 199)
+        guarded.note = "\t + follow-up,\r\n\"引号\""
+        guarded.occurredAt = before
+        var literal = HealthRecord(kind: .meal)
+        literal.title = "'=Pace"
+        literal.note = "'+follow-up"
+        literal.occurredAt = before
+        var unicode = HealthRecord(kind: .meal)
+        unicode.title = "=\u{0301} pace"
+        unicode.note = "\u{0301}quoted \"\u{0301}\""
+        unicode.occurredAt = before
+        var sourceType = HealthEventType()
+        sourceType.name = targetType.name
+        var event = HealthEvent(typeID: sourceType.id)
+        event.occurredAt = before
+        event.count = 2
+        event.note = "-" + String(repeating: "n", count: 1999)
+        var source = HealthState()
+        source.eventTypes = [sourceType]
+        source.events = [event]
+        let meals = HealthCSV.export(.meal, [guarded, literal, unicode])
+        let events = EventLog.export(source)
+        try must(meals.contains("\"text_escape_v1\"") && meals.contains("\"'" + guarded.title + "\"")
+                 && meals.contains("\"'\t + follow-up,") && meals.contains("\"'=\u{0301} pace\""),
+                 "Versioned health CSV lost the outbound formula guard")
+        try must(events.contains("\"'@Rehab\""), "Versioned event names must stay guarded in spreadsheets")
+        let files = ["meal.csv": meals, "custom-events.csv": events]
+        try db.transaction(now: now) { state in
+            let report = try HealthCSV.importFiles(files, into: &state, now: now)
+            try must(report.added == 4 && report.skipped == 0 && report.invalid == 0, "Versioned file was not fully imported")
+        }
+        try db.transaction(now: now) { state in
+            let report = try HealthCSV.importFiles(files, into: &state, now: now)
+            try must(report.added == 0 && report.skipped == 4 && report.invalid == 0, "IDs did not deduplicate")
+        }
+        let stored = try db.read()
+        for original in [guarded, literal, unicode] {
+            let actual = stored.records.first { $0.id == original.id }
+            try must(actual?.title == original.title && actual?.note == original.note && actual?.occurredAt == before,
+                     "CSV changed record text or its timestamp")
+            try must(actual?.rewardEligible == false && actual?.source == "import", "Import changed reward eligibility")
+        }
+        let importedEvent = stored.events.first { $0.id == event.id }
+        try must(importedEvent?.typeID == targetType.id && importedEvent?.note == event.note && importedEvent?.count == 2,
+                 "Decoded event name or note did not survive fallback type matching")
+        try must(stored.island.energy == 60 && stored.ledgers.isEmpty, "CSV import granted island rewards")
+
+        let header = "id,occurred_at,name,amount,note"
+        let validID = UUID()
+        let validStamp = "2026-02-28T11:00:00.125+01:00"
+        let validRow = "\(validID.uuidString),\(validStamp),'=literal,5,'+literal"
+        let missingRow = UUID().uuidString
+        let badDates = ["", "not a timestamp", "2026-02-30T10:00:00Z", "2999-01-01T00:00:00Z"]
+        let badRecords = badDates.map { "\(UUID().uuidString),\($0),invalid,1," }
+        let recordFile = ([header, validRow, missingRow] + badRecords).joined(separator: "\r\n")
+        let eventHeader = "id,type_id,name,occurred_at,count,note"
+        let badEvents = badDates.map { "\(UUID().uuidString),\(targetType.id.uuidString),,\($0),2," }
+        let eventFile = ([eventHeader] + badEvents).joined(separator: "\r\n")
+        try db.transaction(now: now) { state in
+            let report = try HealthCSV.importFiles(["water.csv": recordFile, "custom-events.csv": eventFile], into: &state, now: now)
+            try must(report.added == 1 && report.invalid == 9, "Missing, malformed or future dates were written")
+        }
+        let legacy = try db.read().records.first { $0.id == validID }
+        try must(legacy?.title == "'=literal" && legacy?.note == "'+literal", "Legacy literal apostrophes were changed")
+        let expected = Date(timeIntervalSince1970: 1_772_272_800.125)
+        try must(legacy?.occurredAt == expected, "ISO timestamp with fractional seconds or timezone was lost")
+        let rollbackID = UUID().uuidString
+        let rollbackFile = "\(header)\r\n\(rollbackID),\(validStamp),rollback,1,"
+        for malformed in ["id,name\r\ninvalid,missing", "id,occurred_at\r\n\"unterminated"] {
+            try rejects("Malformed companion CSV must abort the entire selection") {
+                try db.transaction(now: now) { state in
+                    _ = try HealthCSV.importFiles(["water.csv": rollbackFile, "custom-events.csv": malformed], into: &state, now: now)
+                }
+            }
+            try must(try db.read().records.count == 4, "Malformed companion CSV partially committed a valid record")
+        }
+        print("PASS: health CSV reversible formula guard, legacy text, invalid dates, deduplication and atomic rollback")
+    }
+
     static func main() throws {
         setbuf(stdout, nil)
         print("stage: isolated fixture")
@@ -38,6 +127,7 @@ final class UserDefaults {
             try fm.createDirectory(at: integration.appendingPathComponent(relative, isDirectory: true), withIntermediateDirectories: true)
         }
         setenv("RHYTHM_INTEGRATION_TEST_GROUP", group.path, 1)
+        try healthCSV(in: root)
         let date = Date().addingTimeInterval(-30)
         let fixtureHealth = root.appendingPathComponent("FixtureHealth", isDirectory: true)
         let fixture = try HealthDatabase(directory: fixtureHealth)

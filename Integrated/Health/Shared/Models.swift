@@ -245,9 +245,13 @@ enum EventLog {
     static func level(_ count: Int) -> Int { count <= 0 ? 0 : min(count, 4) }
     static func export(_ state: HealthState) -> String {
         let f = ISO8601DateFormatter()
-        var rows = [["id","type_id","name","occurred_at","count","note","source"]]
-        rows += state.events.sorted { $0.occurredAt < $1.occurredAt }.map { e in [e.id.uuidString,e.typeID.uuidString,state.eventTypes.first(where:{$0.id == e.typeID})?.name ?? "",f.string(from:e.occurredAt),String(e.count),e.note,e.source] }
-        return "\u{FEFF}" + rows.map { $0.map(HealthCSV.cell).joined(separator:",") }.joined(separator:"\r\n")
+        let header = ["id","type_id","name","occurred_at","count","note","source"]
+        let rows = state.events.sorted { $0.occurredAt < $1.occurredAt }.map { event -> [String] in
+            let name = state.eventTypes.first(where: { $0.id == event.typeID })?.name ?? ""
+            return [event.id.uuidString, event.typeID.uuidString, name, f.string(from: event.occurredAt),
+                    String(event.count), event.note, event.source]
+        }
+        return HealthCSV.document(header: header, rows: rows)
     }
 }
 struct HealthError: LocalizedError {

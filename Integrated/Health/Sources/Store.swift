@@ -238,24 +238,24 @@ import UniformTypeIdentifiers
     func importCSV() {
         let panel=NSOpenPanel(); panel.canChooseDirectories=true; panel.canChooseFiles=false
         guard panel.runModal() == .OK,let url=panel.url else { return }
-        var added=0, skipped=0, found=false
+        var files: [String: String] = [:]
+        do {
+            for name in HealthCSV.fileNames {
+                do { files[name] = try String(contentsOf: url.appendingPathComponent(name), encoding: .utf8) }
+                catch let error as CocoaError where error.code == .fileReadNoSuchFile || error.code == .fileNoSuchFile { continue }
+            }
+        } catch { message = error.localizedDescription; return }
+        guard !files.isEmpty else {
+            message = t("没有找到可导入的 CSV 文件，请选择本应用导出的文件夹。", "No importable CSV found. Choose a folder exported by this app.")
+            return
+        }
+        let now = Date()
+        var report = (added: 0, skipped: 0, invalid: 0)
         if update({ s in
-            for kind in RecordKind.allCases {
-                guard let text=try? String(contentsOf:url.appendingPathComponent("\(kind.rawValue).csv"),encoding:.utf8) else { continue }
-                found=true
-                for r in HealthCSV.import(kind,text) {
-                    if s.records.contains(where:{$0.id==r.id}) { skipped+=1 } else { s.records.append(r); added+=1 }
-                }
-            }
-            if let text=try? String(contentsOf:url.appendingPathComponent("custom-events.csv"),encoding:.utf8) {
-                found=true
-                for e in HealthCSV.importEvents(text,state:s) {
-                    if s.events.contains(where:{$0.id==e.id}) { skipped+=1 } else { s.events.append(e); added+=1 }
-                }
-            }
-            if !found { throw HealthError(t("没有找到可导入的 CSV 文件，请选择本应用导出的文件夹。","No importable CSV found. Choose a folder exported by this app.")) }
+            report = try HealthCSV.importFiles(files, into: &s, now: now)
         }) {
-            notice=t("已导入 \(added) 条，跳过 \(skipped) 条重复。导入的记录不补发岛屿奖励。","Imported \(added), skipped \(skipped) duplicates. Imports grant no island rewards.")
+            notice = t("已导入 \(report.added) 条，跳过 \(report.skipped) 条重复、\(report.invalid) 条无效记录。导入的记录不补发岛屿奖励。",
+                       "Imported \(report.added), skipped \(report.skipped) duplicates and \(report.invalid) invalid rows. Imports grant no island rewards.")
         }
     }
     func reset(all: Bool) {

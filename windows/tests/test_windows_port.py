@@ -12,8 +12,8 @@ from gaojiezou import catalog
 from gaojiezou.errors import AppError
 from gaojiezou.footprints import load_cities
 from gaojiezou.library import LIBRARY_NAME
-from gaojiezou.store import RhythmStore, focus_csv, habit_csv, sleep_csv
-from gaojiezou.timeutil import cocoa
+from gaojiezou.store import FISH_BITE_DURATION, RhythmStore, focus_csv, habit_csv, sleep_csv
+from gaojiezou.timeutil import cocoa, from_cocoa
 from gaojiezou.version import VERSION_LABEL
 from gaojiezou.web import serve
 
@@ -42,7 +42,7 @@ def ready(tmp_path: Path, moment=None) -> tuple[RhythmStore, Clock]:
 
 
 def test_version_label():
-    assert VERSION_LABEL == "4.12+6"
+    assert VERSION_LABEL == "4.13+7"
 
 
 def test_create_preserves_unknown_field_and_omits_owned_animals(tmp_path):
@@ -299,6 +299,24 @@ def test_fishing_rarity_and_aquarium_cap(tmp_path):
     assert store.collect_aquarium() == 7 * catalog.daily_income(5)
 
 
+def test_fishing_cast_keeps_the_active_window_and_recasts_after_expiry(tmp_path, monkeypatch):
+    store, clock = ready(tmp_path)
+    monkeypatch.setattr("gaojiezou.store.random.uniform", lambda _start, _end: 2.0)
+    bait = store.library["bait"]
+    first = store.cast_line()["biteAt"]
+    clock.moment += timedelta(seconds=1)
+    assert store.cast_line()["biteAt"] == first
+    clock.moment = from_cocoa(first) + timedelta(seconds=FISH_BITE_DURATION - 0.25)
+    assert store.cast_line()["biteAt"] == first
+
+    clock.moment = from_cocoa(first) + timedelta(seconds=FISH_BITE_DURATION)
+    assert store.reel()["hooked"] is False
+    second = store.cast_line()["biteAt"]
+    assert second > first and store.library["bait"] == bait
+    clock.moment = from_cocoa(second) + timedelta(seconds=FISH_BITE_DURATION)
+    assert store.cast_line()["biteAt"] > second
+
+
 def test_health_record_rewards_and_island_gather(tmp_path):
     store, _clock = ready(tmp_path)
     with pytest.raises(AppError):
@@ -367,6 +385,9 @@ def test_local_http_creates_and_reads_library(tmp_path):
         assert saved["state"]["library"]["habits"][-1]["title"] == "CI smoke habit"
         disk = (tmp_path / LIBRARY_NAME).read_text(encoding="utf-8")
         assert "CI smoke habit" in disk
+        original = post("/api/fish/cast", {})["state"]["cast"]
+        _clock.moment += timedelta(seconds=1)
+        assert post("/api/fish/cast", {})["state"]["cast"] == original
         denied = urllib.request.Request(server.url + "api/state")
         with pytest.raises(urllib.error.HTTPError):
             urllib.request.urlopen(denied)

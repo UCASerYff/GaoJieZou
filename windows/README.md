@@ -1,10 +1,10 @@
-# 搞节奏 Windows 4.12
+# 搞节奏 Windows 4.13
 
-适用于 Windows 10 和 Windows 11 x64。应用显示版本为 **4.12+6**，Windows Installer 产品版本为 **4.12.6**。通过开始菜单启动后，默认使用应用专属的 Edge 窗口和临时浏览器配置。Edge 不可用时使用系统默认浏览器，退出时会停止本地服务，外部浏览器的窗口由浏览器管理。应用服务只监听本机环回地址，业务接口使用每次启动生成的会话令牌。
+适用于 Windows 10 和 Windows 11 x64。应用显示版本为 **4.13+7**，Windows Installer 产品版本为 **4.13.7**。通过开始菜单启动后，默认使用应用专属的 Edge 窗口和临时浏览器配置。Edge 不可用时使用系统默认浏览器，退出时会停止本地服务，外部浏览器的窗口由浏览器管理。应用服务只监听本机环回地址，业务接口使用每次启动生成的会话令牌。
 
 ## 安装和运行
 
-双击 **GaoJieZou-4.12+6-Windows-x64.msi** 为当前 Windows 用户安装。安装后可从开始菜单打开搞节奏、打开桌面小组件，也可使用已注册的 `gaojiezou://` 链接。
+双击 **GaoJieZou-4.13+7-Windows-x64.msi** 为当前 Windows 用户安装。安装后可从开始菜单打开搞节奏、打开桌面小组件，也可使用已注册的 `gaojiezou://` 链接。
 
 关闭主窗后，搞节奏的图标留在通知区域，Windows 也可能把它放在隐藏图标区。从图标或菜单中的「打开搞节奏」可以恢复主窗。重复启动、应用链接和小组件深链共用当前运行实例。专注遇到锁屏、显示器关闭或系统待机时由系统事件暂停，解除相关状态后继续。手动暂停需要手动继续。睡眠使用实际开始及结束时间，在后台和待机期间继续计时。
 
@@ -33,6 +33,8 @@
 
 构建 6 从原有书法图案生成圆角、多尺寸图标。开始菜单、程序快捷方式及运行中的应用专用窗口使用相同的书法图标，通知区域按任务栏所在屏幕的 DPI 选取图标。资源覆盖 100%、125%、150%、175% 和 200% 的常用窗口图标尺寸。
 
+构建 7 保留健康 CSV 导出中的表格公式防护，并在重新导入本版导出的文件时还原标题和备注。连续抛竿沿用进行中的咬钩时间。足迹在保存新 HEIC 或 HEIF 附件前会检查容器是否完整，已有原件继续可访问。
+
 | 区域 | Windows 工作流 |
 | --- | --- |
 | 今天 | 计时入口、睡眠补录、今日打卡和行动、健康摘要、每周复盘、月度总览、近期奖励 |
@@ -57,10 +59,10 @@
 ~~~powershell
 cd windows
 .\build.ps1 -Python C:\path\to\venv\Scripts\python.exe
-.\smoke-install.ps1 -Package '..\dist\GaoJieZou-4.12+6-Windows-x64.msi' -CheckShell
+.\smoke-install.ps1 -Package '..\dist\GaoJieZou-4.13+7-Windows-x64.msi' -CheckShell
 ~~~
 
-构建脚本先运行测试，再生成 `dist/GaoJieZou-4.12+6-Windows-x64.msi` 和对应的 `.msi.sha256`。安装包文件名包含 Windows 构建号，可与旧版并存。隔离冒烟使用合成资料，核对安装入口、前版资料重开、已安装程序的 HTTP 读写与系统卸载保留资料。GitHub Actions 执行相同构建和冒烟并保留产物。如需重制图标，在装有 Pillow 的环境运行 `python windows/generate_app_icons.py`。
+构建脚本先运行测试，再生成 `dist/GaoJieZou-4.13+7-Windows-x64.msi` 和对应的 `.msi.sha256`。安装包文件名包含 Windows 构建号，可与旧版并存。隔离冒烟使用合成资料，核对安装入口、前版资料重开、已安装程序的 HTTP 读写与系统卸载保留资料。GitHub Actions 执行相同构建和冒烟并保留产物。如需重制图标，在装有 Pillow 的环境运行 `python windows/generate_app_icons.py`。
 
 可用 Node.js 和 Edge 运行浏览器回归。脚本使用独立的 Edge 配置和合成资料。
 
@@ -76,4 +78,4 @@ python -m pytest -q
 python .\launch.py --serve --no-browser --port 8765 --data-dir .\build\isolated-rhythm
 ~~~
 
-`GaoJieZou-cli.exe --inspect` 打印计数及资料状态。`--version` 打印 `4.12+6`。`--widget-snapshot` 兼容旧 Windows 的计数文件用法。`--widgets` 打开桌面小组件。`--create-empty` 明确在空目录创建资料。`--serve` 配合 `--no-browser` 可在独立目录冒烟，`--port 0` 由系统分配端口。
+`GaoJieZou-cli.exe --inspect` 打印计数及资料状态。`--version` 打印 `4.13+7`。`--widget-snapshot` 兼容旧 Windows 的计数文件用法。`--widgets` 打开桌面小组件。`--create-empty` 明确在空目录创建资料。`--serve` 配合 `--no-browser` 可在独立目录冒烟，`--port 0` 由系统分配端口。

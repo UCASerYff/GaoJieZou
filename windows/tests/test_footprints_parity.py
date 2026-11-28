@@ -6,13 +6,17 @@ import struct
 import sys
 import zlib
 from datetime import datetime, timedelta, timezone
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import pytest
 
 from gaojiezou.errors import AppError
 from gaojiezou.footprints import FootprintStore, compute_metrics, load_cities, search_cities
-from gaojiezou.heic import heif_extension, heif_preview
+from gaojiezou.heic import has_heif_media, heif_extension, heif_preview
 from gaojiezou.resources import asset_dir
+from gaojiezou.store import RhythmStore
+from gaojiezou.web import serve
 
 
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=")
@@ -30,6 +34,20 @@ HEIC = base64.b64decode(
     "bR2eqTA1CxwVr+EPDOwwxQozGebDGCONDfQNW8c7YdXv8z1m/7IhfOhOA="
 )
 NOW = datetime(2026, 11, 27, 8, tzinfo=timezone.utc)
+
+
+def box(kind, payload):
+    return struct.pack(">I4s", len(payload) + 8, kind) + payload
+
+
+def heic_with_inline_media():
+    file_type, meta, media = HEIC[:28], HEIC[36:370], HEIC[378:]
+    # Reuse the original HEVC bitstream and item properties. iloc v1 switches
+    # to construction method 1 with a base offset relative to the new idat.
+    location = meta[45:71]
+    assert location == bytes.fromhex("0000000044400001000100000000017a00010000000000000095")
+    location = b"\x01\x00\x00\x00" + location[4:10] + b"\x00\x01" + location[10:12] + b"\x00" * 4 + location[16:]
+    return file_type + box(b"meta", meta[:37] + box(b"iloc", location) + meta[71:] + box(b"idat", media))
 
 
 @pytest.fixture
@@ -94,6 +112,78 @@ def test_wic_decodes_genuine_heic_pixels():
     right = 20 * stride + 1 + 76 * 3
     assert pixels[left] > 200 and pixels[left + 1] < 50
     assert pixels[right] < 60 and pixels[right + 1] > 125
+
+
+def test_heif_upload_checks_container_envelopes_for_items_and_sequences():
+    assert has_heif_media(HEIC)
+    assert has_heif_media(heic_with_inline_media())
+    assert has_heif_media(HEIC[:370] + b"\0\0\0\0" + HEIC[374:])  # mdat to EOF
+    assert has_heif_media(HEIC + struct.pack(">I4sQ", 1, b"free", 17) + b"\0")
+
+    # Exercise the sequence envelope independently of the optional WIC codec.
+    sequence_type = box(b"ftyp", b"msf1\0\0\0\0hevc")
+    sequence_tracks = box(b"moov", box(b"trak", box(b"tkhd", b"\0" * 84)))
+    assert has_heif_media(sequence_type + sequence_tracks + box(b"mdat", HEIC[378:]))
+    assert not has_heif_media(sequence_type + sequence_tracks)
+    assert not has_heif_media(HEIC[:28])
+    assert not has_heif_media(HEIC[:-1])
+    assert not has_heif_media(HEIC[:28] + box(b"meta", b"\0" * 4 +
+                                           struct.pack(">I4s", 25, b"idat") + b"\0"))
+
+
+def test_heif_upload_routes_preserve_valid_and_legacy_originals(tmp_path, monkeypatch):
+    store = RhythmStore(tmp_path, tz=timezone.utc, clock=lambda: NOW)
+    store.create_library()
+    footprints = store.footprints
+    truncated = HEIC[:28]
+    existing = footprints.save_visit({"cityID": "cn-420100"}, NOW)
+    with monkeypatch.context() as legacy:
+        # A previously stored, structurally invalid original must stay readable.
+        legacy.setattr("gaojiezou.footprints.has_heif_media", lambda _data: True)
+        legacy_id = footprints.add_photo(existing["id"], "legacy.heic", truncated, NOW)["id"]
+
+    def no_decoder(_data):
+        raise OSError("Synthetic missing Windows decoder")
+
+    monkeypatch.setattr("gaojiezou.heic._wic_rgb", no_decoder)
+    server = serve(store, port=0, open_browser=False)
+
+    def call(path, body=None):
+        headers = {"X-Gao-Token": server.token}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            body = json.dumps(body).encode()
+        request = Request(server.url.rstrip("/") + path, data=body, headers=headers)
+        try:
+            with urlopen(request, timeout=5) as response:
+                return response.status, response.read()
+        except HTTPError as exc:
+            return exc.code, exc.read()
+
+    def encoded(data):
+        return {"filename": "image.heic", "contentBase64": base64.b64encode(data).decode()}
+
+    try:
+        assert call("/api/footprints/photo?id=" + legacy_id) == (200, truncated)
+        assert call("/api/footprints/visit", {"id": existing["id"], "cityID": existing["cityID"], "note": "edited"})[0] == 200
+        prior_files = set(footprints.photos.iterdir())
+        code, failure = call("/api/footprints/visit", {"cityIDs": ["cn-110000"], "photos": [encoded(truncated)]})
+        assert code == 400 and json.loads(failure)["code"] == "invalid"
+        assert len(footprints.journal["visits"]) == 1 and set(footprints.photos.iterdir()) == prior_files
+
+        assert call("/api/footprints/photo/preview", encoded(HEIC))[0] == 422
+        for payload in (HEIC, heic_with_inline_media()):
+            code, response = call("/api/footprints/visit", {"cityIDs": ["cn-110000"], "photos": [encoded(payload)],
+                                                           "allowDuplicate": True})
+            assert code == 200
+            photo_id = json.loads(response)["result"]["photoIDs"][0]
+            assert call("/api/footprints/photo?id=" + photo_id) == (200, payload)
+    finally:
+        server.shutdown()
+        server.server_close()
+        footprints.close()
+        store.health.close()
+        store.sleep.close()
 
 
 def test_atomic_multi_city_visit_reuse_photos_and_preserve_trip_links_on_undo(store):

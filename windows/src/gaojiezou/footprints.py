@@ -24,7 +24,7 @@ from pathlib import Path
 
 from gaojiezou.catalog import TRAIN_CARRIAGES, train_upgrade_cost
 from gaojiezou.errors import AppError
-from gaojiezou.heic import heif_extension
+from gaojiezou.heic import has_heif_media, heif_extension
 from gaojiezou.library import dumps
 from gaojiezou.resources import asset_dir
 from gaojiezou.timeutil import cocoa, from_cocoa
@@ -297,6 +297,8 @@ class FootprintStore:
         if len(content) > PHOTO_BYTES_LIMIT:
             raise AppError("单张照片不能超过 30 MB。", "invalid")
         suffix = _image_extension(content)
+        if suffix in {".heic", ".heif"} and not has_heif_media(content):
+            raise AppError("HEIC 照片文件不完整或缺少图像数据，未保存。", "invalid")
         if strict and suffix is None:
             raise AppError("无法读取照片，请使用 JPEG、PNG 或 HEIC。", "invalid")
         digest = hashlib.sha256(content).hexdigest()

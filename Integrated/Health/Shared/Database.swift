@@ -334,97 +334,214 @@ final class HealthDatabase {
 }
 
 enum HealthCSV {
-    static func cell(_ value: String) -> String {
-        var v = value
-        if let first = v.trimmingCharacters(in:.whitespacesAndNewlines).first, "=+-@".contains(first) { v = "'" + v }
-        return "\"" + v.replacingOccurrences(of:"\"",with:"\"\"") + "\""
+    // Legacy files cannot distinguish an inserted guard from a literal apostrophe.
+    private static let textEscapeColumn = "text_escape_v1"
+
+    static let fileNames = RecordKind.allCases.map { "\($0.rawValue).csv" } + ["custom-events.csv"]
+
+    static func document(header: [String], rows: [[String]]) -> String {
+        func quote(_ value: String) -> String {
+            "\"" + value.replacingOccurrences(of: "\"", with: "\"\"", options: .literal) + "\""
+        }
+        let headerLine = (header + [textEscapeColumn]).map(quote).joined(separator: ",")
+        let nameIndex = header.firstIndex(of: "name")
+        let noteIndex = header.firstIndex(of: "note")
+        let lines = rows.map { row -> String in
+            var flags = 0
+            let cells = row.enumerated().map { index, value -> String in
+                let first = value.unicodeScalars.first { !CharacterSet.whitespacesAndNewlines.contains($0) }
+                guard let first, "=+-@".unicodeScalars.contains(first) else { return quote(value) }
+                if index == nameIndex { flags |= 1 }
+                if index == noteIndex { flags |= 2 }
+                return quote("'" + value)
+            }
+            return (cells + [quote(String(flags))]).joined(separator: ",")
+        }
+        return "\u{FEFF}" + ([headerLine] + lines).joined(separator: "\r\n")
     }
+
     static func export(_ kind: RecordKind,_ records: [HealthRecord]) -> String {
-        var rows = [["id","occurred_at","timezone","type","name","amount","unit","kcal","protein_g","carbs_g","fat_g","meal_slot","note","source","meal_source","fullness_percent"]]
+        let header = ["id","occurred_at","timezone","type","name","amount","unit","kcal","protein_g","carbs_g","fat_g","meal_slot","note","source","meal_source","fullness_percent"]
+        var rows: [[String]] = []
         let formatter = ISO8601DateFormatter()
         func value(_ n: Double?) -> String { n.map { String($0) } ?? "" }
         for r in records.filter({ $0.kind==kind }).sorted(by:{ $0.occurredAt<$1.occurredAt }) {
             rows.append([r.id.uuidString,formatter.string(from:r.occurredAt),r.timezone,r.kind.rawValue,r.title,String(r.amount),r.kind == .meal ? r.foodUnit : r.kind.unit,value(r.calories),value(r.protein),value(r.carbs),value(r.fat),r.kind == .meal ? String(r.slot) : "",r.note,r.source,r.mealSource?.rawValue ?? "",r.fullnessPercent.map(String.init) ?? ""])
         }
-        return "\u{FEFF}" + rows.map { $0.map(cell).joined(separator:",") }.joined(separator:"\r\n")
+        return document(header: header, rows: rows)
     }
+
     /// Minimal CSV reader for our own export format: BOM tolerant, quoted cells, escaped quotes, LF/CRLF.
-    static func parse(_ text: String) -> [[String]] {
+    private static func parse(_ text: String) throws -> [[String]] {
         var rows: [[String]] = []
         var row: [String] = []
         var field = ""
         var quoted = false
-        var i = text.startIndex
-        if i < text.endIndex && text[i] == "\u{FEFF}" { i = text.index(after:i) }
-        func endField() { row.append(field); field = "" }
+        var closedQuote = false
+        let input = text.unicodeScalars
+        var i = input.startIndex
+        if i < input.endIndex && input[i] == "\u{FEFF}" { i = input.index(after: i) }
+        func endField() { row.append(field); field = ""; closedQuote = false }
         func endRow() { endField(); rows.append(row); row = [] }
-        while i < text.endIndex {
-            let ch = text[i]
+        while i < input.endIndex {
+            let ch = input[i]
             if quoted {
                 if ch == "\"" {
-                    let next = text.index(after:i)
-                    if next < text.endIndex && text[next] == "\"" { field.append("\""); i = next } else { quoted = false }
-                } else { field.append(ch) }
-            } else if ch == "\"" && field.isEmpty { quoted = true }
-            else if ch == "," { endField() }
-            else if ch == "\r\n" { endRow() } // CRLF is one grapheme cluster in Swift
-            else if ch == "\r" { /* swallow; LF ends the row */ }
-            else if ch == "\n" { endRow() }
-            else { field.append(ch) }
-            i = text.index(after:i)
+                    let next = input.index(after: i)
+                    if next < input.endIndex && input[next] == "\"" {
+                        field.append("\""); i = next
+                    } else {
+                        quoted = false; closedQuote = true
+                    }
+                } else { field.unicodeScalars.append(ch) }
+            } else if ch == "," {
+                endField()
+            } else if ch == "\r" || ch == "\n" {
+                endRow()
+                let next = input.index(after: i)
+                if ch == "\r", next < input.endIndex, input[next] == "\n" { i = next }
+            } else if closedQuote {
+                throw HealthError("健康 CSV 引号格式无效 / Invalid quoting in health CSV")
+            } else if ch == "\"" && field.isEmpty {
+                quoted = true
+            } else {
+                field.unicodeScalars.append(ch)
+            }
+            i = input.index(after: i)
         }
-        if !field.isEmpty || !row.isEmpty { endRow() }
+        guard !quoted else { throw HealthError("健康 CSV 引号格式无效 / Invalid quoting in health CSV") }
+        if !field.isEmpty || !row.isEmpty || closedQuote { endRow() }
         return rows
     }
-    /// Import one exported kind file. Rows failing validation are skipped; imported entries never grant rewards.
-    static func `import`(_ kind: RecordKind,_ text: String) -> [HealthRecord] {
-        let rows = parse(text)
-        guard let header = rows.first, let idIndex = header.firstIndex(of:"id") else { return [] }
-        func column(_ name: String) -> Int? { header.firstIndex(of:name) }
+    private struct Row {
+        let columns: [String: Int]
+        let cells: [String]
+
+        subscript(_ column: String) -> String? {
+            guard let index = columns[column], cells.indices.contains(index) else { return nil }
+            return cells[index]
+        }
+
+        var freeText: (name: String, note: String)? {
+            let name = self["name"] ?? ""
+            let note = self["note"] ?? ""
+            guard columns[HealthCSV.textEscapeColumn] != nil else { return (name, note) }
+            guard let flags = self[HealthCSV.textEscapeColumn], ["0", "1", "2", "3"].contains(flags),
+                  let mask = Int(flags) else { return nil }
+            if (mask & 1 != 0 && name.utf8.first != 0x27) || (mask & 2 != 0 && note.utf8.first != 0x27) { return nil }
+            return (mask & 1 == 0 ? name : String(decoding: name.utf8.dropFirst(), as: UTF8.self),
+                    mask & 2 == 0 ? note : String(decoding: note.utf8.dropFirst(), as: UTF8.self))
+        }
+    }
+
+    private static let instantShape = try! NSRegularExpression(
+        pattern: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\.[0-9]+)?(?:Z|[+-](?:[01][0-9]|2[0-3]):?[0-5][0-9])\z"#
+    )
+
+    private static func read<Entry>(_ input: String, entry: (Row, Date, String, String) -> Entry?) throws
+        -> (entries: [Entry], invalid: Int) {
+        let rows = try parse(input)
+        guard let header = rows.first, header.contains("id"), header.contains("occurred_at") else {
+            throw HealthError("健康 CSV 缺少 id 或 occurred_at 列 / Health CSV is missing id or occurred_at")
+        }
+        let columns = Dictionary(header.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { first, _ in first })
         let formatter = ISO8601DateFormatter()
-        var imported: [HealthRecord] = []
-        for row in rows.dropFirst() where row.count > idIndex {
-            guard let id = UUID(uuidString:row[idIndex]) else { continue }
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = TimeZone(secondsFromGMT: 0)!
+
+        var entries: [Entry] = []
+        var invalid = 0
+        for cells in rows.dropFirst() where cells != [""] {
+            let row = Row(columns: columns, cells: cells)
+            guard cells.count <= header.count,
+                  let stamp = row["occurred_at"],
+                  instantShape.firstMatch(in: stamp, range: NSRange(stamp.startIndex..<stamp.endIndex, in: stamp)) != nil,
+                  let year = Int(stamp.prefix(4)), year > 0,
+                  let month = Int(stamp.dropFirst(5).prefix(2)), let day = Int(stamp.dropFirst(8).prefix(2)),
+                  DateComponents(year: year, month: month, day: day).isValidDate(in: gregorian),
+                  let date = fractional.date(from: stamp) ?? formatter.date(from: stamp),
+                  let text = row.freeText, let value = entry(row, date, text.name, text.note) else {
+                invalid += 1
+                continue
+            }
+            entries.append(value)
+        }
+        return (entries, invalid)
+    }
+
+    private static func records(_ kind: RecordKind, _ text: String, now: Date) throws
+        -> (entries: [HealthRecord], invalid: Int) {
+        try read(text) { row, date, name, note in
+            guard let rawID = row["id"], let id = UUID(uuidString: rawID) else { return nil }
             var record = HealthRecord(kind:kind)
             record.id = id
-            if let i = column("occurred_at"), i < row.count, let date = formatter.date(from:row[i]) { record.occurredAt = date }
-            if let i = column("timezone"), i < row.count, TimeZone(identifier:row[i]) != nil { record.timezone = row[i] }
-            if let i = column("name"), i < row.count { record.title = row[i] }
-            if let i = column("amount"), i < row.count, let amount = Double(row[i]) { record.amount = amount }
-            if let i = column("unit"), i < row.count, kind == .meal, ["serving","g"].contains(row[i]) { record.foodUnit = row[i] }
-            func number(_ name: String) -> Double? { guard let i = column(name), i < row.count, !row[i].isEmpty else { return nil }; return Double(row[i]) }
-            record.calories = number("kcal"); record.protein = number("protein_g"); record.carbs = number("carbs_g"); record.fat = number("fat_g")
-            if let i = column("meal_slot"), i < row.count, let slot = Int(row[i]), kind == .meal { record.slot = slot }
-            if let i = column("meal_source"), i < row.count, kind == .meal { record.mealSource = MealSource(rawValue: row[i]) }
-            if let i = column("fullness_percent"), i < row.count, kind == .meal { record.fullnessPercent = Int(row[i]) }
-            if let i = column("note"), i < row.count { record.note = row[i] }
+            record.occurredAt = date
+            if let timezone = row["timezone"], TimeZone(identifier: timezone) != nil { record.timezone = timezone }
+            record.title = name
+            if let amount = row["amount"].flatMap({ Double($0) }) { record.amount = amount }
+            if let unit = row["unit"], kind == .meal, ["serving", "g"].contains(unit) { record.foodUnit = unit }
+            record.calories = row["kcal"].flatMap { Double($0) }
+            record.protein = row["protein_g"].flatMap { Double($0) }
+            record.carbs = row["carbs_g"].flatMap { Double($0) }
+            record.fat = row["fat_g"].flatMap { Double($0) }
+            if kind == .meal {
+                record.slot = row["meal_slot"].flatMap { Int($0) } ?? record.slot
+                record.mealSource = row["meal_source"].flatMap(MealSource.init(rawValue:))
+                record.fullnessPercent = row["fullness_percent"].flatMap { Int($0) }
+            }
+            record.note = note
             record.source = "import"
             record.rewardEligible = false
-            guard (try? Engine.validateRecord(record,now:Date())) != nil else { continue }
-            imported.append(record)
+            guard (try? Engine.validateRecord(record, now: now)) != nil else { return nil }
+            return record
         }
-        return imported
     }
-    static func importEvents(_ text: String,state: HealthState) -> [HealthEvent] {
-        let rows = parse(text)
-        guard let header = rows.first, let idIndex = header.firstIndex(of:"id") else { return [] }
-        func column(_ name: String) -> Int? { header.firstIndex(of:name) }
-        let formatter = ISO8601DateFormatter()
-        var imported: [HealthEvent] = []
-        for row in rows.dropFirst() where row.count > idIndex {
-            guard let id = UUID(uuidString:row[idIndex]) else { continue }
-            var typeID: UUID?
-            if let i = column("type_id"), i < row.count, let candidate = UUID(uuidString:row[i]), state.eventTypes.contains(where: { $0.id == candidate }) { typeID = candidate }
-            if typeID == nil, let i = column("name"), i < row.count, let match = state.eventTypes.first(where: { $0.name == row[i] || $0.englishName == row[i] }) { typeID = match.id }
-            guard let resolved = typeID else { continue }
-            var event = HealthEvent(typeID:resolved)
+
+    private static func events(_ text: String, types: [HealthEventType], now: Date) throws
+        -> (entries: [HealthEvent], invalid: Int) {
+        try read(text) { row, date, name, note in
+            guard let rawID = row["id"], let id = UUID(uuidString: rawID),
+                  let count = row["count"].flatMap({ Int($0) }), (1...999).contains(count),
+                  date <= now.addingTimeInterval(60), note.count <= 2000 else { return nil }
+            let candidate = row["type_id"].flatMap(UUID.init(uuidString:))
+            let match = types.first { $0.id == candidate }
+                ?? types.first { !name.isEmpty && ($0.name == name || $0.englishName == name) }
+            guard let match else { return nil }
+            var event = HealthEvent(typeID: match.id)
             event.id = id
-            if let i = column("occurred_at"), i < row.count, let date = formatter.date(from:row[i]) { event.occurredAt = date }
-            if let i = column("count"), i < row.count, let count = Int(row[i]), (1...999).contains(count) { event.count = count }
-            if let i = column("note"), i < row.count { event.note = row[i] }
+            event.occurredAt = date
+            event.count = count
+            event.note = note
             event.source = "import"
-            imported.append(event)
+            return event
         }
-        return imported
+    }
+
+    /// Called in a single database transaction so structural failures roll back the selection.
+    static func importFiles(_ files: [String: String], into state: inout HealthState, now: Date)
+        throws -> (added: Int, skipped: Int, invalid: Int) {
+        var report = (added: 0, skipped: 0, invalid: 0)
+        var recordIDs = Set(state.records.map(\.id))
+        for kind in RecordKind.allCases {
+            guard let text = files["\(kind.rawValue).csv"] else { continue }
+            let parsed = try records(kind, text, now: now)
+            report.invalid += parsed.invalid
+            for record in parsed.entries {
+                if recordIDs.insert(record.id).inserted { state.records.append(record); report.added += 1 }
+                else { report.skipped += 1 }
+            }
+        }
+        if let text = files["custom-events.csv"] {
+            let parsed = try events(text, types: state.eventTypes, now: now)
+            var eventIDs = Set(state.events.map(\.id))
+            report.invalid += parsed.invalid
+            for event in parsed.entries {
+                if eventIDs.insert(event.id).inserted { state.events.append(event); report.added += 1 }
+                else { report.skipped += 1 }
+            }
+        }
+        return report
     }
 }

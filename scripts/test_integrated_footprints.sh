@@ -12,6 +12,6 @@ xcrun swiftc -D INTEGRATION_PATH_TEST -swift-version 5 -parse-as-library -module
  "$SOURCE/Shared/Repository.swift" "$SOURCE/Shared/IntegratedStorage.swift" "$SOURCE/Sources/IntegratedPreferences.swift" \
  "$SOURCE/HostSupport/BackupIntegrity.swift" "$SOURCE/HostSupport/DailyBackup.swift" "$SOURCE/HostSupport/AppBackupExport.swift" \
  "$SOURCE/HostSupport/AppBackupRestore.swift" "$SOURCE/Tests/IntegrationCoreRegression.swift" -o "$OUT/footprints-core-regression"
-FIXTURE=$(mktemp -d /private/tmp/rhythm-footprints-integration-XXXXXXXX.noindex)
+FIXTURE=$(mktemp -d /private/tmp/rhythm-footprints-integration-XXXXXXXX)
 trap 'rm -rf "$FIXTURE"' EXIT
-RHYTHM_INTEGRATION_TEST_GROUP="$FIXTURE/group" "$OUT/footprints-core-regression"
+RHYTHM_INTEGRATION_TEST_GROUP="$FIXTURE/fixture.noindex/group" "$OUT/footprints-core-regression"

@@ -48,6 +48,52 @@ def heif_extension(data: bytes) -> str | None:
     return None
 
 
+def _boxes(data: bytes, start: int, end: int):
+    while start < end:
+        if end - start < 8:
+            raise ValueError("truncated HEIF box header")
+        size, kind = struct.unpack_from(">I4s", data, start)
+        header = 8
+        if size == 1:
+            if end - start < 16:
+                raise ValueError("truncated HEIF large box header")
+            size, = struct.unpack_from(">Q", data, start + 8)
+            header = 16
+        elif size == 0:
+            size = end - start
+        if kind == b"uuid":
+            header += 16
+        if not header <= size <= end - start:
+            raise ValueError("HEIF box extends outside its container")
+        yield kind, start + header, start + size
+        start += size
+
+
+def has_heif_media(data: bytes) -> bool:
+    """Recognize a self-contained image item or sequence without requiring a codec."""
+    if not heif_extension(data):
+        return False
+    indexed_items = inline_media = track = top_level_media = False
+    try:
+        for kind, start, end in _boxes(data, 0, len(data)):
+            if kind == b"meta":
+                if end - start < 4:  # The FullBox version and flags precede its children.
+                    return False
+                items = {child for child, payload, limit in _boxes(data, start + 4, end) if payload < limit}
+                if {b"iloc", b"iinf"}.issubset(items):
+                    indexed_items = True
+                    inline_media |= b"idat" in items
+            elif kind == b"moov":
+                for child, payload, limit in _boxes(data, start, end):
+                    track |= child == b"trak" and payload < limit
+            elif kind in {b"mdat", b"imda"}:
+                # Identified media data begins with a four-byte identifier.
+                top_level_media |= end - start > (4 if kind == b"imda" else 0)
+    except ValueError:
+        return False
+    return inline_media or (top_level_media and (indexed_items or track))
+
+
 def heif_preview(data: bytes) -> bytes:
     """Decode the primary still and emit PNG pixels without carrying EXIF metadata."""
     if not data or len(data) > MAX_HEIF_BYTES:

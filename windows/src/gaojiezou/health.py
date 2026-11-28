@@ -36,6 +36,7 @@ RECORD_CSV_FIELDS = (
 )
 EVENT_CSV_FIELDS = ("id", "type_id", "name", "occurred_at", "count", "note", "source")
 HEALTH_CSV_FILES = {f"{kind}.csv": kind for kind in RECORD_TITLES} | {"custom-events.csv": "events"}
+CSV_TEXT_ESCAPE = "text_escape_v1"  # Bit 1 guards name, bit 2 guards note.
 
 
 def _mutating(operation):
@@ -1164,13 +1165,30 @@ def _iso(value) -> str:
 def _csv_document(header, rows) -> str:
     def safe(value):
         value = "" if value is None else str(value)
-        return "'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value
+        if value.lstrip().startswith(("=", "+", "-", "@")):
+            return "'" + value, True
+        return value, False
 
+    name_index, note_index = header.index("name"), header.index("note")
     output = io.StringIO(newline="")
     writer = csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
-    writer.writerow(header)
-    writer.writerows([safe(value) for value in row] for row in rows)
+    writer.writerow((*header, CSV_TEXT_ESCAPE))
+    for row in rows:
+        cells = [safe(value) for value in row]
+        flags = int(cells[name_index][1]) | (int(cells[note_index][1]) << 1)
+        writer.writerow([value for value, _ in cells] + [flags])
     return "\ufeff" + output.getvalue().removesuffix("\r\n")
+
+
+def _import_csv_text(row) -> tuple[str, str]:
+    flags = row.get(CSV_TEXT_ESCAPE, "0")
+    if flags not in ("0", "1", "2", "3"):
+        raise AppError("健康 CSV 文字转义标记无效。", "invalid")
+    name, note = row.get("name") or "", row.get("note") or ""
+    mask = int(flags)
+    if (mask & 1 and not name.startswith("'")) or (mask & 2 and not note.startswith("'")):
+        raise AppError("健康 CSV 文字转义不完整。", "invalid")
+    return name[1:] if mask & 1 else name, note[1:] if mask & 2 else note
 
 
 def _import_csv_row(kind, row, types, zone, now) -> dict:
@@ -1178,13 +1196,13 @@ def _import_csv_row(kind, row, types, zone, now) -> dict:
         raise AppError("记录日期缺失。", "invalid")
     record_id = str(uuid.UUID(row["id"])).upper()
     occurred = _instant(row["occurred_at"], now)
+    name, note = _import_csv_text(row)
     if kind == "events":
         type_id = (row.get("type_id") or "").upper()
         match = next((item for item in types if item["id"].upper() == type_id), None)
-        if match is None and row.get("name"):
-            match = next((item for item in types if row["name"] in (item["name"], item.get("englishName"))), None)
+        if match is None and name:
+            match = next((item for item in types if name in (item["name"], item.get("englishName"))), None)
         count = _integer(row.get("count"), "事项次数")
-        note = row.get("note") or ""
         if match is None or not 1 <= count <= 999 or len(note) > 2000 or occurred > cocoa(now) + 60:
             raise AppError("事项记录无效。", "invalid")
         return {"id": record_id, "typeID": match["id"], "occurredAt": occurred, "count": count,
@@ -1198,7 +1216,7 @@ def _import_csv_row(kind, row, types, zone, now) -> dict:
         record_tz = zone
     record = {
         "id": record_id, "kind": kind, "occurredAt": occurred, "createdAt": cocoa(now), "updatedAt": cocoa(now),
-        "title": row.get("name") or "", "amount": row.get("amount"), "note": row.get("note") or "",
+        "title": name, "amount": row.get("amount"), "note": note,
         "timezone": record_tz, "rewardEligible": False, "source": "import", "slot": 0,
         "baseAmount": 1, "foodUnit": "serving", "usesNutrition": False,
     }
