@@ -1,32 +1,18 @@
-name: Windows
-
-on:
-  push:
-  pull_request:
-
+name: Windows isolated MSI upgrade
+on: push
+permissions:
+  contents: read
+  actions: read
 jobs:
-  package:
+  upgrade:
     runs-on: windows-latest
-    defaults:
-      run:
-        working-directory: windows
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/download-artifact@v4
         with:
-          python-version: "3.12"
-          architecture: x64
-      - name: Build the x64 Windows Installer
-        run: .\build.ps1
-      - name: Install, smoke-test and uninstall
-        run: |
-          $installer = Get-ChildItem ..\dist\GaoJieZou-*+*-Windows-x64.msi -File
-          if (@($installer).Count -ne 1) { throw "Expected one Windows Installer package." }
-          .\smoke-install.ps1 -Package $installer.FullName -CheckShell
-      - uses: actions/upload-artifact@v4
-        with:
+          github-token: ${{ github.token }}
+          run-id: 46113462786
           name: GaoJieZou-Windows-x64
-          if-no-files-found: error
-          path: |
-            dist/GaoJieZou-*+*-Windows-x64.msi
-            dist/GaoJieZou-*+*-Windows-x64.msi.sha256
+          path: candidate
+      - name: Upgrade from the published MSI with synthetic data
+        run: .\windows\verify-upgrade-ci.ps1
