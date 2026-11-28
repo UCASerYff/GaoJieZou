@@ -1,0 +1,58 @@
+name: macOS 4.13 health and installer fixtures
+on:
+  push:
+    branches: ['codex/macos-candidate-fixture-20261128-49d98e1']
+permissions:
+  contents: read
+jobs:
+  focused:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Run the corrected health and installer regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == arm64 && "$(sw_vers -productVersion)" == 15.* ]]
+          [[ "$(git rev-parse HEAD^)" == 49d98e1beab7f780e4ee2301055c6ca9fb0e3f56 ]]
+          [[ "$(git diff --name-only HEAD^ HEAD)" == .github/workflows/macos-candidate-fixture-recheck.yml ]]
+          xcodebuild -version
+          scratch=$(mktemp -d /private/tmp/rhythm-fixture-recheck.XXXXXXXX)
+          trap 'rm -rf -- "$scratch"' EXIT
+          source_root="$scratch/source.noindex"
+          mkdir -p -- "$source_root" "$scratch/tmp"
+          git archive HEAD^ | tar -xf - -C "$source_root"
+          export TMPDIR="$scratch/tmp/"
+          cd "$source_root"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          script = Path('Integrated/Health/Tests/run_integrated_health.sh')
+          original = script.read_text()
+          script.write_text(original.replace('export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer',
+                                             'export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"', 1))
+          PY
+          failed=0
+          echo '::group::integrated_health'
+          if RHYTHM_HEALTH_TEST_COMPILE_GO=1 zsh Integrated/Health/Tests/run_integrated_health.sh; then
+            echo 'PASS integrated_health'
+          else
+            echo '::error title=integrated_health::Health integration or CSV regression failed'
+            failed=1
+          fi
+          echo '::endgroup::'
+          echo '::group::widget_install'
+          if python3 -B Tests/test_install_widget_registration.py; then
+            echo 'PASS widget_install'
+          else
+            echo '::error title=widget_install::Synthetic widget installation invariants failed'
+            failed=1
+          fi
+          echo '::endgroup::'
+          exit "$failed"
