@@ -1,0 +1,43 @@
+name: macOS footprints fixture rerun
+on:
+  push:
+    branches: ['codex/macos-footprints-fixture-20261128-2d8a93b']
+permissions:
+  contents: read
+jobs:
+  footprints:
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Run the isolated Footprints integration regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == arm64 && "$(sw_vers -productVersion)" == 15.* ]]
+          [[ "$(git rev-parse HEAD^)" == 2d8a93bea5d2cd1f007c2ec97e835983cff4e009 ]]
+          [[ "$(git diff --name-only HEAD^ HEAD | wc -l | tr -d ' ')" == 3 ]]
+          git diff --exit-code HEAD^ HEAD -- . ':(exclude).github/workflows/macos-footprints-fixture.yml' \
+            ':(exclude)Integrated/Footprints/Tests/IntegrationCoreRegression.swift' \
+            ':(exclude)scripts/test_integrated_footprints.sh'
+          xcodebuild -version
+          scratch=$(mktemp -d "$RUNNER_TEMP/rhythm-footprints-rerun.XXXXXX")
+          trap 'rm -rf -- "$scratch"' EXIT
+          mkdir -p -- "$scratch/source.noindex"
+          git archive HEAD | tar -xf - -C "$scratch/source.noindex"
+          runner="$scratch/source.noindex/scripts/test_integrated_footprints.sh"
+          python3 - "$runner" <<'PY'
+          from pathlib import Path
+          import sys
+
+          script = Path(sys.argv[1])
+          original = script.read_text()
+          script.write_text(original.replace('export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer',
+                                             'export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"', 1))
+          PY
+          RHYTHM_INTEGRATION_TEST_COMPILE_GO=1 zsh "$runner"
