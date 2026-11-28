@@ -1,0 +1,86 @@
+name: macOS isolated business regression
+on:
+  push:
+    branches: ['codex/macos-regression-20261128-2d8a93b']
+permissions:
+  contents: read
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+  RHYTHM_QA_BASE: 2d8a93bea5d2cd1f007c2ec97e835983cff4e009
+jobs:
+  business:
+    name: ${{ matrix.group }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: Records and widgets
+            suites: habit_backfill shared_sleep sleep_sync widget_sync
+          - group: Lifecycle and isolated recovery
+            suites: lifecycle_log backup host_integration_restore
+          - group: Integrated storage and footprints
+            suites: integration_authority integrated_footprints
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Run exact-baseline synthetic fixtures
+        shell: bash
+        env:
+          RHYTHM_QA_SUITES: ${{ matrix.suites }}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == arm64 && "$(sw_vers -productVersion)" == 15.* ]]
+          test -x "$DEVELOPER_DIR/usr/bin/xcodebuild"
+          xcodebuild -version
+          xcrun swiftc --version
+          [[ "$(git rev-parse HEAD^)" == "$RHYTHM_QA_BASE" ]]
+          [[ "$(git diff --name-only "$RHYTHM_QA_BASE" HEAD)" == .github/workflows/macos-regression-check.yml ]]
+
+          scratch=$(mktemp -d "$RUNNER_TEMP/rhythm-regressions.XXXXXX")
+          trap 'rm -rf -- "$scratch"' EXIT
+          source_root="$scratch/source.noindex"
+          mkdir -p -- "$source_root" "$scratch/tmp" "$scratch/data"
+          git archive "$RHYTHM_QA_BASE" | tar -xf - -C "$source_root"
+          export TMPDIR="$scratch/tmp/"
+          export GAOJIEZOU_DATA_DIR="$scratch/data"
+
+          # A few older harnesses hardcode the default Xcode. Only their copied
+          # launcher environment is adapted; Swift input is from the exact commit.
+          python3 - "$source_root/scripts" <<'PY'
+          from pathlib import Path
+          import os
+          import sys
+
+          directory = Path(sys.argv[1])
+          for suite in os.environ['RHYTHM_QA_SUITES'].split():
+              file = directory / f'test_{suite}.sh'
+              original = file.read_text()
+              line = 'export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer\n'
+              if line in original:
+                  file.write_text(original.replace(line, 'export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"\n', 1))
+          PY
+
+          failed=0
+          for suite in $RHYTHM_QA_SUITES; do
+            echo "::group::$suite"
+            setup=(env)
+            case "$suite" in
+              host_integration_restore) setup+=(GAO_HOST_INTEGRATION_RESTORE_TEST_GO=1) ;;
+              integration_authority|integrated_footprints) setup+=(RHYTHM_INTEGRATION_TEST_COMPILE_GO=1) ;;
+            esac
+            if "${setup[@]}" zsh "$source_root/scripts/test_$suite.sh"; then
+              echo "PASS $suite"
+              printf -- '- PASS %s\n' "$suite" >> "$GITHUB_STEP_SUMMARY"
+            else
+              result=$?
+              echo "::error title=$suite::Regression exited with status $result"
+              printf -- '- FAIL %s (exit %s)\n' "$suite" "$result" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+            echo '::endgroup::'
+          done
+          exit "$failed"
