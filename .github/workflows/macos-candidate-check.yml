@@ -1,0 +1,125 @@
+name: macOS 4.13 build 15 candidate
+on:
+  push:
+    branches: ['codex/macos-candidate-check-20261128-26521aad']
+permissions:
+  contents: read
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+  RHYTHM_QA_BASE: 26521aad40bf6c68e0c9a6b798d4be4177f45965
+jobs:
+  build:
+    name: Native build, targeted regressions and resident launch
+    runs-on: macos-15
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Compile and verify the unsigned app and WidgetKit extensions
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD^)" == "$RHYTHM_QA_BASE" ]]
+          [[ "$(git diff --name-only HEAD^ HEAD | wc -l | tr -d ' ')" == 2 ]]
+          git diff --exit-code HEAD^ HEAD -- . ':(exclude).github/workflows/macos-candidate-check.yml' \
+            ':(exclude).github/qa/macos-launch-smoke.py'
+          scratch=$(mktemp -d "$RUNNER_TEMP/rhythm-candidate-gui.XXXXXX")
+          gui_work="$scratch/runtime.noindex"
+          mkdir -p -- "$gui_work"
+          printf 'RHYTHM_QA_GUI_WORK=%s\n' "$gui_work" >> "$GITHUB_ENV"
+          export RHYTHM_QA_GUI_WORK="$gui_work"
+          cp scripts/verify_macos_candidate.sh scripts/.qa-verify-macos.sh
+          cat >> scripts/.qa-verify-macos.sh <<'CAPTURE'
+          if ! ditto "$source_root/build.verify.noindex/搞节奏.app" "$RHYTHM_QA_GUI_WORK/搞节奏.app"; then
+              echo '::warning::Could not stage the unsigned candidate for the optional GUI observation.'
+          fi
+          CAPTURE
+          bash scripts/.qa-verify-macos.sh
+      - name: Observe the isolated resident GUI when Aqua is available
+        continue-on-error: true
+        shell: bash
+        run: python3 -B .github/qa/macos-launch-smoke.py
+      - name: Remove isolated GUI staging
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          if [[ "${RHYTHM_QA_GUI_WORK:-}" == "$RUNNER_TEMP"/rhythm-candidate-gui.*/runtime.noindex ]]; then
+            rm -rf -- "${RHYTHM_QA_GUI_WORK%/runtime.noindex}"
+          fi
+  fixtures:
+    name: ${{ matrix.group }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: Health CSV, Footprints and integrated authority
+            suites: integrated_health integrated_footprints integration_authority
+          - group: Habit, sleep, widgets and host recovery
+            suites: habit_backfill shared_sleep sleep_sync widget_sync lifecycle_log host_integration_restore
+          - group: Synthetic widget registration and fishing
+            suites: install_widget_registration widget_registration fishing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Run isolated exact-commit fixtures
+        shell: bash
+        env:
+          RHYTHM_QA_SUITES: ${{ matrix.suites }}
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == arm64 && "$(sw_vers -productVersion)" == 15.* ]]
+          [[ "$(git rev-parse HEAD^)" == "$RHYTHM_QA_BASE" ]]
+          xcodebuild -version
+          scratch=$(mktemp -d /private/tmp/rhythm-candidate-data.XXXXXXXX)
+          trap 'rm -rf -- "$scratch"' EXIT
+          source_root="$scratch/source.noindex"
+          mkdir -p -- "$source_root" "$scratch/tmp" "$scratch/data"
+          git archive "$RHYTHM_QA_BASE" | tar -xf - -C "$source_root"
+          export TMPDIR="$scratch/tmp/"
+          export GAOJIEZOU_DATA_DIR="$scratch/data"
+          cd "$source_root"
+          python3 - <<'PY'
+          from pathlib import Path
+
+          line = 'export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer\n'
+          chosen = 'export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer}"\n'
+          scripts = list(Path('scripts').glob('test_*.sh')) + [Path('Integrated/Health/Tests/run_integrated_health.sh')]
+          for file in scripts:
+              original = file.read_text()
+              if line in original:
+                  file.write_text(original.replace(line, chosen, 1))
+          PY
+          run_suite() {
+            case "$1" in
+              integrated_health) RHYTHM_HEALTH_TEST_COMPILE_GO=1 zsh Integrated/Health/Tests/run_integrated_health.sh ;;
+              integration_authority|integrated_footprints) RHYTHM_INTEGRATION_TEST_COMPILE_GO=1 zsh "scripts/test_$1.sh" ;;
+              host_integration_restore) GAO_HOST_INTEGRATION_RESTORE_TEST_GO=1 zsh "scripts/test_$1.sh" ;;
+              install_widget_registration|widget_registration) python3 -B "Tests/test_$1.py" ;;
+              fishing)
+                xcrun swiftc -swift-version 5 -parse-as-library -target arm64-apple-macosx14.0 \
+                  -module-cache-path "$scratch/cache" Sources/FishingSession.swift Tests/FishingSessionTests.swift \
+                  -o "$scratch/fishing-session" && "$scratch/fishing-session" ;;
+              *) zsh "scripts/test_$1.sh" ;;
+            esac
+          }
+          failed=0
+          for suite in $RHYTHM_QA_SUITES; do
+            echo "::group::$suite"
+            if run_suite "$suite"; then
+              echo "PASS $suite"
+              printf -- '- PASS %s\n' "$suite" >> "$GITHUB_STEP_SUMMARY"
+            else
+              status=$?
+              echo "::error title=$suite::Regression exited with status $status"
+              printf -- '- FAIL %s (exit %s)\n' "$suite" "$status" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+            echo '::endgroup::'
+          done
+          exit "$failed"
