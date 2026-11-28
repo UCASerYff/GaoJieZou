@@ -27,8 +27,7 @@ final class UserDefaults {
         let now = Date(timeIntervalSince1970: 1_795_514_400)
         let before = now.addingTimeInterval(-60)
         let db = try HealthDatabase(directory: root.appendingPathComponent("CSVHealth", isDirectory: true))
-        var targetType = HealthEventType()
-        targetType.name = "@Rehab"
+        let targetType = HealthEventType(name: "@Rehab")
         try db.transaction(now: now) { $0.eventTypes.append(targetType) }
 
         var guarded = HealthRecord(kind: .meal)
@@ -43,8 +42,7 @@ final class UserDefaults {
         unicode.title = "=\u{0301} pace"
         unicode.note = "\u{0301}quoted \"\u{0301}\""
         unicode.occurredAt = before
-        var sourceType = HealthEventType()
-        sourceType.name = targetType.name
+        let sourceType = HealthEventType(name: targetType.name)
         var event = HealthEvent(typeID: sourceType.id)
         event.occurredAt = before
         event.count = 2

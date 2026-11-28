@@ -59,8 +59,9 @@ class WidgetRegistrationTests(unittest.TestCase):
     def test_multiple_instances_refused(self):
         with self.assertRaises(RuntimeError): self.parse(self.header() + self.header())
 
-    def test_nonformal_path_refused(self):
-        with self.assertRaises(RuntimeError): self.parse(self.header(path=self.base / 'Other.app/Contents/PlugIns/GaoJieZouWidgets.appex'))
+    def test_nonformal_instance_is_absent_for_exact_target(self):
+        reply = self.header(path=self.base / 'Other.app/Contents/PlugIns/GaoJieZouWidgets.appex')
+        self.assertEqual(self.parse(reply), 'absent')
 
     def test_other_version_refused(self):
         with self.assertRaises(RuntimeError): self.parse(self.header(version='4.10'))
@@ -85,33 +86,32 @@ class WidgetRegistrationTests(unittest.TestCase):
         formal = self.base / 'Formal.app'; inode = formal.stat().st_ino
         log = self.base / 'commands.log'
         script = '''set -u
-TARGET=$1
-WORK=$2
-ROOT=$3
-COMMAND_LOG=$4
-REPLACEMENT_STARTED=0
-UNPACKED=0
-INSTALL_OK=0
-HAD_OLD=1
-ARCHIVE_READY=1
-LSREGISTER=fake_lsregister
+ROOT=$1
+COMMAND_LOG=$2
+UNPACKED=$3
 rm() { print -r -- "rm:$*" >> "$COMMAND_LOG"; }
-fake_lsregister() { print -r -- "ls:$*" >> "$COMMAND_LOG"; }
-unregister_formal_widgets() { print -r -- unregister >> "$COMMAND_LOG"; }
-receipt_status() { print -r -- "status:$*" >> "$COMMAND_LOG"; }
+rmdir() { print -r -- "rmdir:$*" >> "$COMMAND_LOG"; }
 ''' + body + '\nfinish_install 1\n'
-        result = subprocess.run(['/bin/zsh', '-c', script, 'test', str(formal), str(self.base / 'verify.noindex'),
-                                 str(self.base), str(log)], capture_output=True, text=True)
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(formal.stat().st_ino, inode)
-        self.assertEqual(log.read_text().strip(), 'rm:-rf ' + str(self.base / 'verify.noindex'))
+        stage = self.base / '.install.noindex'
+        for unpacked, expected in ((0, []), (1, [f'rm:-rf {stage / "搞节奏.app"}', f'rmdir:{stage}'])):
+            with self.subTest(unpacked=unpacked):
+                result = subprocess.run(['/bin/zsh', '-c', script, 'test', str(self.base), str(log), str(unpacked)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 1)
+                self.assertEqual(formal.stat().st_ino, inode)
+                commands = log.read_text().splitlines() if log.exists() else []
+                self.assertEqual(commands, expected)
 
     def test_replacement_phase_starts_after_precise_unregister(self):
-        body = SOURCE.split('# No backup, temporary app', 1)[1]
-        self.assertLess(body.index('if ! unregister_formal_widgets'), body.index('REPLACEMENT_STARTED=1'))
-        self.assertLess(body.index('if ! "$LSREGISTER" -u "$TARGET"'), body.index('REPLACEMENT_STARTED=1'))
-        self.assertLess(body.index('REPLACEMENT_STARTED=1'), body.index('rm -rf "$TARGET"'))
-        self.assertIn('pre-replacement-widget-unregister-failed-formal-program-preserved', body)
+        self.assertIn('set -euo pipefail', SOURCE.splitlines()[:4])
+        body = SOURCE.split("trap 'finish_install $?' EXIT", 1)[1]
+        unregister = body.index('    unregister_formal_widgets\n')
+        unregister_services = body.index('"$LSREGISTER" -u "$TARGET"')
+        remove = body.index('rm -rf "$TARGET"')
+        copy = body.index('ditto "$SOURCE" "$TARGET"')
+        verify = body.index('verify_bundle "$TARGET"', copy)
+        register = body.index('\nregister_formal', verify)
+        self.assertTrue(unregister < unregister_services < remove < copy < verify < register)
 
 
 if __name__ == '__main__':
